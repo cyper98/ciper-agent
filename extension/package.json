@@ -1,0 +1,146 @@
+{
+  "name": "ciper-agent",
+  "displayName": "Ciper Agent",
+  "description": "Local AI coding assistant powered by Ollama — chat, code analysis, planning, and more. Runs 100% offline, no API keys required.",
+  "version": "0.2.0",
+  "publisher": "ciper",
+  "icon": "images/icon.png",
+  "galleryBanner": {
+    "color": "#1e1e2e",
+    "theme": "dark"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yourusername/ciper-agent"
+  },
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": ["AI", "Programming Languages", "Other"],
+  "keywords": ["ai", "ollama", "copilot", "coding assistant", "local ai", "offline", "llm", "mistral", "llama"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "ciper.chat",
+        "title": "Open Chat",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.analyzeCode",
+        "title": "Analyze Code",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.plan",
+        "title": "Generate Plan",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.switchModel",
+        "title": "Switch Model",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.clearHistory",
+        "title": "Clear Chat History",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.exportChat",
+        "title": "Export Chat as Markdown",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.searchHistory",
+        "title": "Search Chat History",
+        "category": "Ciper"
+      },
+      {
+        "command": "ciper.analyzeProject",
+        "title": "Analyze Project",
+        "category": "Ciper"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "ciper.chat",
+        "key": "ctrl+shift+c",
+        "mac": "cmd+shift+c"
+      },
+      {
+        "command": "ciper.analyzeCode",
+        "key": "ctrl+shift+a",
+        "mac": "cmd+shift+a",
+        "when": "editorHasSelection"
+      },
+      {
+        "command": "ciper.plan",
+        "key": "ctrl+shift+l",
+        "mac": "cmd+shift+l"
+      },
+      {
+        "command": "ciper.switchModel",
+        "key": "ctrl+shift+m",
+        "mac": "cmd+shift+m"
+      },
+      {
+        "command": "ciper.exportChat",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e"
+      }
+    ],
+    "configuration": {
+      "title": "Ciper Agent",
+      "properties": {
+        "ciper.backend.url": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "Ciper backend API URL"
+        },
+        "ciper.defaultModel": {
+          "type": "string",
+          "default": "mistral",
+          "description": "Default Ollama model to use"
+        },
+        "ciper.temperature": {
+          "type": "number",
+          "default": 0.7,
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Temperature for model responses (0 = deterministic, 1 = creative)"
+        },
+        "ciper.sendFileContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically send current file context to AI"
+        }
+      }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ciper.analyzeCode",
+          "when": "editorHasSelection",
+          "group": "ciper@1"
+        },
+        {
+          "command": "ciper.plan",
+          "group": "ciper@2"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "node ./out/test/runTest.js"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.84.0",
+    "@types/node": "^20.x",
+    "typescript": "^5.3.3"
+  }
+}
