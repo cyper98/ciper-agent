@@ -1,4 +1,4 @@
-"""Chat Engine Agent - handles multi-turn conversations"""
+"""Chat Engine Agent - handles multi-turn conversations."""
 from typing import Iterator
 from llm.ollama_client import OllamaClient
 from context.context_manager import ContextManager
@@ -13,7 +13,42 @@ You help developers with:
 
 When you receive project context (file tree + key files), use it to give specific, accurate answers.
 Reference actual file names and paths from the project. Be concise and practical.
-Use code blocks when sharing code examples."""
+Use code blocks when sharing code examples.
+
+## FILE DISCOVERY + READING (Agentic)
+When you need to discover relevant files first, output a search request BEFORE read requests:
+<ciper:search query="auth middleware token" />
+
+Then request exact file reads:
+<ciper:read path="src/components/Button.tsx" />
+<ciper:read path="src/utils/api.ts" />
+
+The IDE asks user permission for search/read requests and returns results.
+Only request files you genuinely need - be specific and targeted.
+
+## FILE OPERATIONS
+When the user asks you to CREATE or EDIT files, use ONE of these two formats (both work):
+
+Format A (XML):
+<ciper:write path="src/components/Button.tsx">
+complete file content here
+</ciper:write>
+
+Format B (fence):
+```ciper:write path="src/components/Button.tsx"
+complete file content here
+```
+
+To delete a file, use:
+<ciper:delete path="src/old-file.ts" />
+
+RULES:
+- Always output the COMPLETE file content, never partial snippets
+- Use paths relative to the project root (e.g. src/index.ts, not /absolute/path)
+- You can output multiple file operations in one response
+- After file operations, briefly explain what you changed
+- The IDE will show Accept/Reject controls - you do not need to ask confirmation
+- Only use these formats when actually creating/modifying files, not for examples"""
 
 
 class ChatEngine:
@@ -34,7 +69,7 @@ class ChatEngine:
 
         user_content = message
 
-        # ── Project context (workspace scan) ──────────────────────────────────
+        # Project context (workspace scan)
         if project_context:
             tree: list = project_context.get("tree", [])
             key_files: dict = project_context.get("keyFiles", {})
@@ -42,7 +77,7 @@ class ChatEngine:
 
             ctx = f"\n\n[Project: {root_name}]"
             ctx += f"\nFile tree ({len(tree)} files):\n"
-            ctx += "\n".join(tree[:150])  # cap at 150 paths
+            ctx += "\n".join(tree[:150])
 
             for filename, content in key_files.items():
                 if content:
@@ -50,7 +85,7 @@ class ChatEngine:
 
             user_content += ctx
 
-        # ── Current file / selection context ─────────────────────────────────
+        # Current file / selection context
         elif file_context:
             lang = file_context.get("language", "")
             filename = file_context.get("fileName", "")
@@ -65,18 +100,32 @@ class ChatEngine:
 
             user_content += ctx
 
-        # ── Persist & build history ───────────────────────────────────────────
+        # Manually attached files
+        attached = file_context.get("attachedFiles", []) if file_context else []
+        for af in attached:
+            name = af.get("path", af.get("name", ""))
+            lang = af.get("language", "")
+            content = af.get("content", "")[:5000]
+            user_content += f"\n\n[Attached: {name}]\n```{lang}\n{content}\n```"
+
+        # Pasted images for multimodal models
+        image_data = file_context.get("images", []) if file_context else []
+        if image_data:
+            user_content += f"\n\n[Attached images: {len(image_data)}]"
+
+        # Persist + build history
         self.context.add_message(session_id, role="user", content=user_content, model=model)
         history = self.context.get_history(session_id)
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
 
-        # ── Stream response ───────────────────────────────────────────────────
+        # Stream response
         full_response = ""
         for chunk in self.client.chat(
             model=model,
             messages=messages,
             stream=True,
             temperature=temperature,
+            images=image_data if image_data else None,
         ):
             full_response += chunk
             yield chunk

@@ -82,11 +82,20 @@ class OllamaClient:
         messages: List[dict],
         stream: bool = True,
         temperature: float = 0.7,
+        images: List[str] | None = None,
     ) -> Iterator[str]:
         """Chat endpoint using /api/chat (supports conversation history)"""
+        req_messages = [dict(m) for m in messages]
+        if images:
+            # Ollama expects base64 images on a user message item.
+            for msg in reversed(req_messages):
+                if msg.get("role") == "user":
+                    msg["images"] = images
+                    break
+
         payload = {
             "model": model,
-            "messages": messages,
+            "messages": req_messages,
             "stream": stream,
             "options": {
                 "temperature": temperature,
