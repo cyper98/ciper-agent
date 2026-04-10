@@ -1,6 +1,6 @@
 """Chat Engine Agent - handles multi-turn conversations."""
 from typing import Iterator
-from llm.ollama_client import OllamaClient
+from llm.ollama_client import OllamaClient, NEED_CONTINUE_TAG
 from context.context_manager import ContextManager
 
 SYSTEM_PROMPT = """You are Ciper, a helpful AI coding assistant running locally on the user's machine.
@@ -27,7 +27,29 @@ The IDE asks user permission for search/read requests and returns results.
 Only request files you genuinely need - be specific and targeted.
 
 ## FILE OPERATIONS
-When the user asks you to CREATE or EDIT files, use ONE of these two formats (both work):
+When the user asks you to CREATE or EDIT files, prefer targeted chunk edits first.
+
+Preferred for EDITS (small, safe, contextual):
+<ciper:patch path="src/app.ts">
+<ciper:find>
+exact old text
+</ciper:find>
+<ciper:replace>
+new text
+</ciper:replace>
+</ciper:patch>
+
+Rules for patch edits:
+- Use the shortest unique `find` block that matches exactly in file
+- Propose ONE patch at a time, then continue after user accepts/rejects
+- Keep unrelated code unchanged
+- Inside `<ciper:find>` and `<ciper:replace>`, output raw code/text only (no markdown fences like ```js)
+- `<ciper:find>` MUST be copied verbatim from the latest file content (from read/context), never guessed
+- If you are not sure the exact old text, request `<ciper:read path="..." />` first and do not emit a patch yet
+- For existing files, do NOT use `<ciper:write>` (avoid full-file overwrite); use patch edits only
+- If a file needs multiple edits, output them for that same file in one response so user can approve once per file
+
+When creating a new file or doing a full rewrite, use ONE of these two formats:
 
 Format A (XML):
 <ciper:write path="src/components/Button.tsx">
@@ -43,12 +65,15 @@ To delete a file, use:
 <ciper:delete path="src/old-file.ts" />
 
 RULES:
-- Always output the COMPLETE file content, never partial snippets
+- For `ciper:write`, always output the COMPLETE file content, never partial snippets
 - Use paths relative to the project root (e.g. src/index.ts, not /absolute/path)
 - You can output multiple file operations in one response
 - After file operations, briefly explain what you changed
 - The IDE will show Accept/Reject controls - you do not need to ask confirmation
-- Only use these formats when actually creating/modifying files, not for examples"""
+- Only use these formats when actually creating/modifying files, not for examples
+- Never ask the user to copy/paste code changes manually when an edit is requested; emit operation tags instead
+
+When your response is truncated by token/context limits, continue exactly where you stopped when asked to continue."""
 
 
 class ChatEngine:
@@ -62,6 +87,7 @@ class ChatEngine:
         model: str,
         message: str,
         temperature: float = 0.7,
+        think: bool | None = None,
         file_context: dict = {},
         project_context: dict = {},
     ) -> Iterator[str]:
@@ -125,9 +151,11 @@ class ChatEngine:
             messages=messages,
             stream=True,
             temperature=temperature,
+            think=think,
             images=image_data if image_data else None,
         ):
             full_response += chunk
             yield chunk
 
-        self.context.add_message(session_id, role="assistant", content=full_response, model=model)
+        stored_response = full_response.replace(NEED_CONTINUE_TAG, "")
+        self.context.add_message(session_id, role="assistant", content=stored_response, model=model)

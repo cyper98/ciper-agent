@@ -17,8 +17,25 @@
   "engines": {
     "vscode": "^1.84.0"
   },
-  "categories": ["AI", "Programming Languages", "Other"],
-  "keywords": ["ai", "ollama", "copilot", "coding assistant", "local ai", "offline", "llm", "mistral", "llama"],
+  "activationEvents": [
+    "onWebviewPanel:ciperChat"
+  ],
+  "categories": [
+    "AI",
+    "Programming Languages",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "ollama",
+    "copilot",
+    "coding assistant",
+    "local ai",
+    "offline",
+    "llm",
+    "mistral",
+    "llama"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
@@ -115,6 +132,29 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically send current file context to AI"
+        },
+        "ciper.thinking.mode": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "ask",
+            "off"
+          ],
+          "description": "Thinking behavior for supported models: auto-enable, ask on model switch, or off"
+        },
+        "ciper.thinking.modelPatterns": {
+          "type": "array",
+          "default": [
+            "deepseek-r1",
+            "qwen3",
+            "think",
+            "reasoner"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "description": "Model name substrings treated as Thinking-capable"
         }
       }
     },

@@ -44,6 +44,7 @@ class ChatRequest(BaseModel):
     message: str
     session_id: str = "default"
     temperature: float = 0.7
+    think: bool | None = None
     file_context: dict = {}
     project_context: dict = {}   # file tree + key file contents
 
@@ -133,6 +134,7 @@ async def chat(request: ChatRequest):
             model=request.model,
             message=request.message,
             temperature=request.temperature,
+            think=request.think,
             file_context=request.file_context,
             project_context=request.project_context,
         ):

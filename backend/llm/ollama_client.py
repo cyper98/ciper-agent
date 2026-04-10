@@ -3,6 +3,8 @@ import requests
 import json
 from typing import Iterator, List
 
+NEED_CONTINUE_TAG = "<ciper:need_continue />"
+
 
 class OllamaClient:
     def __init__(self, api_url: str = "http://localhost:11434"):
@@ -82,6 +84,7 @@ class OllamaClient:
         messages: List[dict],
         stream: bool = True,
         temperature: float = 0.7,
+        think: bool | None = None,
         images: List[str] | None = None,
     ) -> Iterator[str]:
         """Chat endpoint using /api/chat (supports conversation history)"""
@@ -101,6 +104,8 @@ class OllamaClient:
                 "temperature": temperature,
             }
         }
+        if think is not None:
+            payload["think"] = bool(think)
 
         try:
             response = requests.post(
@@ -112,17 +117,28 @@ class OllamaClient:
             response.raise_for_status()
 
             if stream:
+                needs_continue = False
                 for line in response.iter_lines():
                     if line:
                         try:
                             data = json.loads(line)
                             if "message" in data and "content" in data["message"]:
                                 yield data["message"]["content"]
+                            if data.get("done"):
+                                reason = str(data.get("done_reason", "")).lower()
+                                if reason in {"length", "max_tokens"}:
+                                    needs_continue = True
                         except json.JSONDecodeError:
                             continue
+                if needs_continue:
+                    yield NEED_CONTINUE_TAG
             else:
                 data = response.json()
-                yield data.get("message", {}).get("content", "")
+                content = data.get("message", {}).get("content", "")
+                reason = str(data.get("done_reason", "")).lower()
+                if reason in {"length", "max_tokens"}:
+                    content += NEED_CONTINUE_TAG
+                yield content
 
         except Exception as e:
             yield f"Error: {str(e)}"

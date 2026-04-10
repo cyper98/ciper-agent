@@ -4,10 +4,11 @@ import * as path from 'path';
 let chatPanel: vscode.WebviewPanel | undefined;
 let statusBar: vscode.StatusBarItem;
 let currentModel = 'mistral';
+let currentThinkingEnabled = false;
 let currentSessionId: string = generateSessionId();
 let abortController: AbortController | undefined;
 let cachedProjectContext: { data: ProjectContext; ts: number } | undefined;
-const sessionProjectContext = new Map<string, ProjectContext>();
+const sessionProjectContext = new Map<string, { data: ProjectContext; ts: number }>();
 const CONTEXT_CACHE_TTL = 120_000; // 2 minutes
 
 interface FileContext {
@@ -54,10 +55,19 @@ function generateSessionId(): string {
 export function activate(context: vscode.ExtensionContext) {
     currentSessionId = context.globalState.get<string>('ciper.currentSessionId', generateSessionId());
 
+    context.subscriptions.push(
+        vscode.window.registerWebviewPanelSerializer('ciperChat', {
+            async deserializeWebviewPanel(webviewPanel: vscode.WebviewPanel): Promise<void> {
+                createChatPanel(context, webviewPanel);
+            },
+        })
+    );
+
     statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
     statusBar.command = 'ciper.switchModel';
     statusBar.tooltip = 'Ciper Agent — click to switch model';
     currentModel = vscode.workspace.getConfiguration('ciper').get<string>('defaultModel', 'mistral');
+    currentThinkingEnabled = resolveThinkingDefault(currentModel);
     updateStatusBar();
     statusBar.show();
     context.subscriptions.push(statusBar);
@@ -98,9 +108,13 @@ export function activate(context: vscode.ExtensionContext) {
             const selected = await vscode.window.showQuickPick(models, { placeHolder: `Current model: ${currentModel}` });
             if (selected) {
                 currentModel = selected;
+                currentThinkingEnabled = await resolveThinkingPreference(selected, true);
                 await vscode.workspace.getConfiguration('ciper').update('defaultModel', selected, vscode.ConfigurationTarget.Global);
                 updateStatusBar();
-                vscode.window.showInformationMessage(`Ciper: Switched to ${selected}`);
+                const thinkLabel = modelSupportsThinking(selected)
+                    ? (currentThinkingEnabled ? 'thinking on' : 'thinking off')
+                    : 'no thinking support';
+                vscode.window.showInformationMessage(`Ciper: Switched to ${selected} (${thinkLabel})`);
                 chatPanel?.webview.postMessage({ type: 'modelChanged', model: selected });
             }
         }),
@@ -184,8 +198,8 @@ function openOrRevealPanel(context: vscode.ExtensionContext) {
     }
 }
 
-function createChatPanel(context: vscode.ExtensionContext) {
-    chatPanel = vscode.window.createWebviewPanel(
+function createChatPanel(context: vscode.ExtensionContext, restoredPanel?: vscode.WebviewPanel) {
+    chatPanel = restoredPanel ?? vscode.window.createWebviewPanel(
         'ciperChat',
         'Ciper',
         vscode.ViewColumn.Beside,
@@ -195,6 +209,11 @@ function createChatPanel(context: vscode.ExtensionContext) {
             localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
         }
     );
+
+    chatPanel.webview.options = {
+        enableScripts: true,
+        localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, 'media')],
+    };
 
     chatPanel.webview.html = getWebviewContent(chatPanel.webview, context);
     chatPanel.onDidDispose(() => { chatPanel = undefined; });
@@ -228,6 +247,28 @@ function createChatPanel(context: vscode.ExtensionContext) {
                     ? getFileContext(vscode.window.activeTextEditor) : {};
                 const pc = vscode.workspace.workspaceFolders ? await getSessionWorkspaceContext(currentSessionId) : {};
                 await streamResponse('Continue from where you left off.', fc, chatPanel!, pc);
+                break;
+            }
+
+            case 'autoConvertEdits': {
+                const sourceText = String(msg.sourceText || '').trim();
+                if (!sourceText) { break; }
+
+                const convertPrompt = `Convert this proposed code answer into executable Ciper file operations only.
+
+Rules:
+- For partial edits, use <ciper:patch path="..."> with nested <ciper:find>...</ciper:find> and <ciper:replace>...</ciper:replace>
+- For an existing file, DO NOT use <ciper:write>. Use patch edits only.
+- If one file has multiple changes, group them under that same file (single file approval).
+- Use <ciper:write> only when creating a new file.
+- For deletion, use <ciper:delete path="..." />
+- Output ONLY operation tags, no markdown and no explanations
+
+Proposal to convert:
+${sourceText}`;
+
+                const pc = vscode.workspace.workspaceFolders ? await getSessionWorkspaceContext(currentSessionId) : {};
+                await streamResponse(convertPrompt, {}, chatPanel!, pc);
                 break;
             }
 
@@ -281,26 +322,46 @@ function createChatPanel(context: vscode.ExtensionContext) {
             case 'applyFileOp': {
                 const ws = vscode.workspace.workspaceFolders?.[0];
                 if (!ws) { vscode.window.showErrorMessage('Ciper: No workspace folder open.'); break; }
-                const { action, filePath, content } = msg;
+                const { action, filePath, content, findText } = msg;
+                const edits: Array<{ f: string; c: string }> = Array.isArray(msg.edits) ? msg.edits : [];
                 const absUri = vscode.Uri.joinPath(ws.uri, filePath);
                 try {
                     if (action === 'write') {
+                        let exists = false;
+                        try { await vscode.workspace.fs.stat(absUri); exists = true; } catch { /* noop */ }
+                        if (exists) {
+                            throw new Error('Refused full-file overwrite for existing file. Use patch edits for partial changes.');
+                        }
                         const dirPath = path.posix.dirname(filePath);
                         if (dirPath && dirPath !== '.') {
                             await vscode.workspace.fs.createDirectory(vscode.Uri.joinPath(ws.uri, ...dirPath.split('/')));
                         }
                         await vscode.workspace.fs.writeFile(absUri, Buffer.from(content, 'utf8'));
+                        invalidateProjectContextCache();
                         const doc = await vscode.workspace.openTextDocument(absUri);
                         await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
-                        chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: true });
+                        chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: true, action });
                         vscode.window.showInformationMessage(`Ciper: Created/updated ${filePath}`);
+                    } else if (action === 'patch') {
+                        const bytes = await vscode.workspace.fs.readFile(absUri);
+                        const source = Buffer.from(bytes).toString('utf8');
+                        const next = edits.length
+                            ? applyPatchEdits(source, edits)
+                            : applySinglePatch(source, String(findText || ''), String(content || ''));
+                        await vscode.workspace.fs.writeFile(absUri, Buffer.from(next, 'utf8'));
+                        invalidateProjectContextCache();
+                        const doc = await vscode.workspace.openTextDocument(absUri);
+                        await vscode.window.showTextDocument(doc, { preview: true, viewColumn: vscode.ViewColumn.One });
+                        chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: true, action });
+                        vscode.window.showInformationMessage(`Ciper: Patched ${filePath}`);
                     } else if (action === 'delete') {
                         await vscode.workspace.fs.delete(absUri);
-                        chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: true });
+                        invalidateProjectContextCache();
+                        chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: true, action });
                         vscode.window.showInformationMessage(`Ciper: Deleted ${filePath}`);
                     }
                 } catch (e) {
-                    chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: false });
+                    chatPanel?.webview.postMessage({ type: 'fileOpDone', filePath, success: false, action });
                     vscode.window.showErrorMessage(`Ciper: File operation failed — ${e}`);
                 }
                 break;
@@ -309,11 +370,26 @@ function createChatPanel(context: vscode.ExtensionContext) {
             case 'previewFileOp': {
                 const ws = vscode.workspace.workspaceFolders?.[0];
                 if (!ws) { break; }
-                const { filePath, content } = msg;
+                const { filePath, content, action, findText } = msg;
+                const edits: Array<{ f: string; c: string }> = Array.isArray(msg.edits) ? msg.edits : [];
                 const absUri = vscode.Uri.joinPath(ws.uri, filePath);
                 const tmpUri = vscode.Uri.joinPath(ws.uri, `.ciper-tmp-${Date.now()}.tmp`);
                 try {
-                    await vscode.workspace.fs.writeFile(tmpUri, Buffer.from(content, 'utf8'));
+                    let previewContent = String(content || '');
+                    if (action === 'write') {
+                        let exists = false;
+                        try { await vscode.workspace.fs.stat(absUri); exists = true; } catch { /* noop */ }
+                        if (exists) {
+                            throw new Error('Refused preview for full-file overwrite on existing file. Use patch edits instead.');
+                        }
+                    } else if (action === 'patch') {
+                        const bytes = await vscode.workspace.fs.readFile(absUri);
+                        const source = Buffer.from(bytes).toString('utf8');
+                        previewContent = edits.length
+                            ? applyPatchEdits(source, edits)
+                            : applySinglePatch(source, String(findText || ''), previewContent);
+                    }
+                    await vscode.workspace.fs.writeFile(tmpUri, Buffer.from(previewContent, 'utf8'));
                     let existsOriginal = false;
                     try { await vscode.workspace.fs.stat(absUri); existsOriginal = true; } catch { /* noop */ }
                     if (existsOriginal) {
@@ -421,10 +497,10 @@ function createChatPanel(context: vscode.ExtensionContext) {
             }
 
             case 'analyzeProject': await vscode.commands.executeCommand('ciper.analyzeProject'); break;
-            case 'switchModel':    await vscode.commands.executeCommand('ciper.switchModel');    break;
-            case 'clearHistory':   await vscode.commands.executeCommand('ciper.clearHistory');   break;
-            case 'exportChat':     await vscode.commands.executeCommand('ciper.exportChat');     break;
-            case 'searchHistory':  await vscode.commands.executeCommand('ciper.searchHistory');  break;
+            case 'switchModel': await vscode.commands.executeCommand('ciper.switchModel'); break;
+            case 'clearHistory': await vscode.commands.executeCommand('ciper.clearHistory'); break;
+            case 'exportChat': await vscode.commands.executeCommand('ciper.exportChat'); break;
+            case 'searchHistory': await vscode.commands.executeCommand('ciper.searchHistory'); break;
         }
     });
 
@@ -465,6 +541,7 @@ async function streamResponse(
                 message,
                 session_id: currentSessionId,
                 temperature: getTemperature(),
+                think: getThinkingEnabledForCurrentModel(),
                 file_context: fileContext,
                 project_context: projectContext,
             }),
@@ -564,6 +641,58 @@ function getTemperature(): number {
     return vscode.workspace.getConfiguration('ciper').get<number>('temperature', 0.7);
 }
 
+type ThinkingMode = 'auto' | 'ask' | 'off';
+
+function getThinkingMode(): ThinkingMode {
+    return vscode.workspace.getConfiguration('ciper').get<ThinkingMode>('thinking.mode', 'auto');
+}
+
+function getThinkingModelPatterns(): string[] {
+    return vscode.workspace.getConfiguration('ciper').get<string[]>(
+        'thinking.modelPatterns',
+        ['deepseek-r1', 'qwen3', 'think', 'reasoner']
+    );
+}
+
+function modelSupportsThinking(modelName: string): boolean {
+    const lowered = modelName.toLowerCase();
+    return getThinkingModelPatterns().some(p => lowered.includes(String(p).toLowerCase()));
+}
+
+function resolveThinkingDefault(modelName: string): boolean {
+    const mode = getThinkingMode();
+    if (mode === 'off') { return false; }
+    if (!modelSupportsThinking(modelName)) { return false; }
+    return mode === 'auto';
+}
+
+async function resolveThinkingPreference(modelName: string, canAsk: boolean): Promise<boolean> {
+    const mode = getThinkingMode();
+    if (mode === 'off' || !modelSupportsThinking(modelName)) {
+        return false;
+    }
+    if (mode === 'auto' || !canAsk) {
+        return true;
+    }
+
+    const pick = await vscode.window.showQuickPick(
+        [
+            { label: 'Enable Thinking', value: true, description: 'Better reasoning quality, can be slower' },
+            { label: 'Disable Thinking', value: false, description: 'Faster response' },
+        ],
+        { placeHolder: `${modelName} supports Thinking. Enable it?` }
+    );
+
+    return pick?.value ?? true;
+}
+
+function getThinkingEnabledForCurrentModel(): boolean {
+    if (!modelSupportsThinking(getCurrentModel())) {
+        return false;
+    }
+    return currentThinkingEnabled;
+}
+
 function getFileContextEnabled(): boolean {
     return vscode.workspace.getConfiguration('ciper').get<boolean>('sendFileContext', true);
 }
@@ -596,16 +725,115 @@ async function getWorkspaceContext(forceRefresh = false): Promise<ProjectContext
 }
 
 async function getSessionWorkspaceContext(sessionId: string, forceRefresh = false): Promise<ProjectContext> {
-    if (!forceRefresh && sessionProjectContext.has(sessionId)) {
-        return sessionProjectContext.get(sessionId)!;
+    const now = Date.now();
+    const cached = sessionProjectContext.get(sessionId);
+    if (!forceRefresh && cached && (now - cached.ts) < CONTEXT_CACHE_TTL) {
+        return cached.data;
     }
     const ctx = await getWorkspaceContext(forceRefresh);
-    sessionProjectContext.set(sessionId, ctx);
+    sessionProjectContext.set(sessionId, { data: ctx, ts: now });
     return ctx;
 }
 
+function invalidateProjectContextCache(): void {
+    cachedProjectContext = undefined;
+    sessionProjectContext.clear();
+}
+
 function updateStatusBar() {
-    statusBar.text = `$(hubot) ${currentModel}`;
+    const thinkBadge = getThinkingEnabledForCurrentModel() ? ' $(sparkle)' : '';
+    statusBar.text = `$(hubot) ${currentModel}${thinkBadge}`;
+}
+
+function stripMarkdownFence(text: string): string {
+    const m = String(text || '').match(/^\s*```[^\n]*\n([\s\S]*?)\n?```\s*$/);
+    return m ? m[1] : text;
+}
+
+function countMatches(source: string, needle: string): number {
+    if (!needle) {
+        return 0;
+    }
+    return source.split(needle).length - 1;
+}
+
+function convertLineEnding(text: string, toCrlf: boolean): string {
+    const normalized = String(text || '').replace(/\r\n/g, '\n');
+    return toCrlf ? normalized.replace(/\n/g, '\r\n') : normalized;
+}
+
+function firstNonEmptyLine(text: string): string {
+    const lines = String(text || '').replace(/\r\n/g, '\n').split('\n');
+    for (const line of lines) {
+        const t = line.trim();
+        if (t) {
+            return t;
+        }
+    }
+    return '';
+}
+
+function applySinglePatch(source: string, findText: string, replaceText: string): string {
+    if (!findText) {
+        throw new Error('Patch find block is empty.');
+    }
+
+    const sourceHasCrlf = source.includes('\r\n');
+    const candidates: Array<{ find: string; replace: string }> = [];
+    const seen = new Set<string>();
+
+    const pushCandidate = (findCandidate: string, replaceCandidate: string) => {
+        if (!findCandidate) {
+            return;
+        }
+        const key = `${findCandidate}\u0000${replaceCandidate}`;
+        if (seen.has(key)) {
+            return;
+        }
+        seen.add(key);
+        candidates.push({ find: findCandidate, replace: replaceCandidate });
+    };
+
+    pushCandidate(findText, replaceText);
+    pushCandidate(convertLineEnding(findText, sourceHasCrlf), convertLineEnding(replaceText, sourceHasCrlf));
+
+    const unfencedFind = stripMarkdownFence(findText);
+    const unfencedReplace = stripMarkdownFence(replaceText);
+    pushCandidate(unfencedFind, unfencedReplace);
+    pushCandidate(convertLineEnding(unfencedFind, sourceHasCrlf), convertLineEnding(unfencedReplace, sourceHasCrlf));
+
+    const trimmedFind = unfencedFind.replace(/^\n+|\n+$/g, '');
+    pushCandidate(trimmedFind, unfencedReplace);
+    pushCandidate(convertLineEnding(trimmedFind, sourceHasCrlf), convertLineEnding(unfencedReplace, sourceHasCrlf));
+
+    for (const candidate of candidates) {
+        const matches = countMatches(source, candidate.find);
+        if (matches > 1) {
+            throw new Error('Patch find block is not unique; refine the snippet and try again.');
+        }
+        if (matches === 1) {
+            return source.replace(candidate.find, candidate.replace);
+        }
+    }
+
+    const anchor = firstNonEmptyLine(unfencedFind);
+    const anchorCount = anchor ? source.split(anchor).length - 1 : 0;
+    throw new Error(
+        `Patch find block was not found in target file. Anchor "${anchor || '(empty)'}" appears ${anchorCount} time(s). Ensure <ciper:find> is exact old text from the current file.`
+    );
+}
+
+function applyPatchEdits(source: string, edits: Array<{ f: string; c: string }>): string {
+    let next = source;
+    for (let i = 0; i < edits.length; i++) {
+        const ed = edits[i] || { f: '', c: '' };
+        try {
+            next = applySinglePatch(next, String(ed.f || ''), String(ed.c || ''));
+        } catch (e) {
+            throw new Error(`Patch edit #${i + 1} failed: ${e}`);
+        }
+    }
+    return next;
 }
 
 // ── Webview HTML ─────────────────────────────────────────────────────────────
@@ -772,4 +1000,4 @@ body{font-family:var(--vscode-font-family);font-size:var(--vscode-font-size);hei
 </html>`;
 }
 
-export function deactivate() {}
+export function deactivate() { }
