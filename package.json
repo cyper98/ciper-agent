@@ -1,0 +1,20 @@
+{
+  "name": "ciper-agent-workspace",
+  "private": true,
+  "workspaces": [
+    "shared",
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "build": "npm run build -w shared && npm run build -w frontend && npm run build -w backend",
+    "watch": "concurrently \"npm run watch -w backend\" \"npm run watch -w frontend\"",
+    "package": "cd backend && npx vsce package",
+    "lint": "npm run lint -w backend",
+    "test": "npm run test -w backend"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  }
+}

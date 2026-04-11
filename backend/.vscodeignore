@@ -1,0 +1,11 @@
+# Files excluded from the .vsix package
+# vsce runs from the backend/ directory, so paths are relative to backend/
+
+.vscode/**
+out/**
+src/**
+node_modules/**
+webpack.config.js
+tsconfig.json
+.eslintrc.json
+**/*.map

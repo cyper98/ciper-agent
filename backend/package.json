@@ -1,0 +1,173 @@
+{
+  "name": "ciper-agent",
+  "displayName": "Ciper Agent",
+  "description": "Local AI coding agent using Ollama — full GitHub Copilot Agent parity",
+  "version": "0.1.0",
+  "publisher": "ciper",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ciper/ciper-agent"
+  },
+  "private": true,
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": ["AI", "Programming Languages", "Other"],
+  "keywords": ["ai", "copilot", "agent", "ollama", "local", "llm"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "vscode:prepublish": "cd .. && npm run build",
+    "build": "webpack --mode production",
+    "watch": "webpack --mode development --watch",
+    "compile": "tsc -p ./",
+    "lint": "eslint src --ext ts",
+    "test": "node ./out/test/runTest.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "ciper.chat.open",
+        "title": "Open Ciper Chat",
+        "category": "Ciper",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "ciper.agent.ask",
+        "title": "Ask Ciper",
+        "category": "Ciper",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "ciper.agent.stop",
+        "title": "Stop Agent",
+        "category": "Ciper",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "ciper.agent.fix",
+        "title": "Fix with Ciper",
+        "category": "Ciper",
+        "icon": "$(wrench)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ciper-sidebar",
+          "title": "Ciper Agent",
+          "icon": "$(sparkle)"
+        }
+      ]
+    },
+    "views": {
+      "ciper-sidebar": [
+        {
+          "type": "webview",
+          "id": "ciper.chatView",
+          "name": "Chat",
+          "icon": "$(comment-discussion)",
+          "contextualTitle": "Ciper Agent"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "ciper.agent.ask",
+          "group": "1_modification@100",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "ciper.agent.fix",
+          "group": "1_modification@101"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ciper.chat.open"
+        },
+        {
+          "command": "ciper.agent.stop",
+          "when": "ciper.agentRunning"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "ciper.chat.open",
+        "key": "ctrl+alt+i",
+        "mac": "cmd+alt+i"
+      },
+      {
+        "command": "ciper.agent.ask",
+        "key": "ctrl+shift+i",
+        "mac": "cmd+shift+i",
+        "when": "editorHasSelection"
+      }
+    ],
+    "configuration": {
+      "title": "Ciper Agent",
+      "properties": {
+        "ciperAgent.ollamaEndpoint": {
+          "type": "string",
+          "default": "http://localhost:11434",
+          "description": "Ollama API endpoint URL"
+        },
+        "ciperAgent.model": {
+          "type": "string",
+          "default": "qwen2.5-coder:7b",
+          "description": "Default model for chat and agent mode"
+        },
+        "ciperAgent.completionModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model for inline completions (leave empty to use main model)"
+        },
+        "ciperAgent.contextTokenBudget": {
+          "type": "number",
+          "default": 8192,
+          "description": "Maximum tokens to use for workspace context"
+        },
+        "ciperAgent.maxAgentIterations": {
+          "type": "number",
+          "default": 20,
+          "description": "Maximum agent loop iterations before stopping"
+        },
+        "ciperAgent.enableInlineCompletions": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable inline code completions (ghost text)"
+        },
+        "ciperAgent.completionDebounceMs": {
+          "type": "number",
+          "default": 300,
+          "description": "Debounce delay in ms before triggering inline completion"
+        },
+        "ciperAgent.requireApprovalForEdits": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show diff preview and require approval before applying file changes"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/diff": "^5.2.1",
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.90.0",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "ts-loader": "^9.5.1",
+    "typescript": "^5.4.5",
+    "webpack": "^5.92.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "@ciper-agent/shared": "*",
+    "diff": "^5.2.0",
+    "zod": "^3.23.8"
+  }
+}

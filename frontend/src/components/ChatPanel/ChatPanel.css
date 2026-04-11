@@ -1,0 +1,30 @@
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  color: var(--vscode-foreground);
+}
+
+.chat-panel__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--vscode-panel-border, #454545);
+  background: var(--vscode-editorGroupHeader-tabsBackground);
+}
+
+.chat-panel__clear-btn {
+  background: transparent;
+  border: none;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  font-family: var(--vscode-font-family);
+  opacity: 0.6;
+  transition: opacity 0.1s;
+}
+.chat-panel__clear-btn:hover { opacity: 1; }

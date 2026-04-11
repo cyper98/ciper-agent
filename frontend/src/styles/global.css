@@ -1,0 +1,77 @@
+@import './variables.css';
+
+/* highlight.js — VSCode-compatible dark theme */
+.hljs { background: transparent; }
+.hljs-keyword, .hljs-selector-tag, .hljs-built_in { color: #569cd6; }
+.hljs-string, .hljs-attr { color: #ce9178; }
+.hljs-number, .hljs-literal { color: #b5cea8; }
+.hljs-comment { color: #6a9955; font-style: italic; }
+.hljs-function, .hljs-title { color: #dcdcaa; }
+.hljs-type, .hljs-class { color: #4ec9b0; }
+.hljs-variable, .hljs-params { color: #9cdcfe; }
+.hljs-operator, .hljs-punctuation { color: #d4d4d4; }
+.hljs-meta { color: #c586c0; }
+.hljs-tag { color: #569cd6; }
+.hljs-attr { color: #9cdcfe; }
+.hljs-name { color: #4ec9b0; }
+
+*,
+*::before,
+*::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+  color: var(--vscode-foreground);
+  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.5;
+}
+
+#root { height: 100%; overflow: hidden; }
+.app  { height: 100%; overflow: hidden; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--vscode-scrollbarSlider-background, rgba(121,121,121,0.4));
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--vscode-scrollbarSlider-hoverBackground, rgba(121,121,121,0.7));
+}
+
+a {
+  color: var(--vscode-textLink-foreground, #3794ff);
+  text-decoration: none;
+}
+a:hover { text-decoration: underline; }
+
+::selection {
+  background: var(--vscode-editor-selectionBackground, rgba(14,99,156,0.4));
+}
+
+/* GFM tables */
+table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+th, td {
+  border: 1px solid var(--vscode-panel-border, #454545);
+  padding: 4px 10px;
+  text-align: left;
+  font-size: 12px;
+}
+th { background: var(--vscode-editorGroupHeader-tabsBackground); font-weight: 600; }
+
+/* GFM blockquote */
+blockquote {
+  margin: 6px 0;
+  padding: 4px 12px;
+  border-left: 3px solid var(--vscode-focusBorder, #007acc);
+  opacity: 0.85;
+}
