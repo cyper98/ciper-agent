@@ -51,8 +51,9 @@ export interface ChatMessage {
   toolAction?: ToolAction;
   toolResult?: ToolResult;
   diffId?: string;
-  diffPath?: string;   // filename shown in DiffViewer header
+  diffPath?: string;    // filename shown in DiffViewer header
   diffContent?: string; // raw unified diff text to render
+  workerPlan?: WorkerStatus[]; // populated for orchestrator-plan messages
 }
 
 // ---------------------------------------------------------------------------
@@ -85,7 +86,10 @@ export type BackendMessage =
   | { kind: 'CONTEXT_INFO';       tokenCount: number; budget: number }
   | { kind: 'CONTEXT_SNAPSHOT';   openFiles: string[]; hasSelection: boolean }
   | { kind: 'RESTORE_HISTORY';    messages: ChatMessage[] }
-  | { kind: 'INJECT_USER_MESSAGE'; content: string; mode: 'chat' | 'agent' };
+  | { kind: 'INJECT_USER_MESSAGE'; content: string; mode: 'chat' | 'agent' }
+  | { kind: 'WORKER_SPAWNED';     taskId: string; description: string; messageId: string }
+  | { kind: 'WORKER_DONE';        taskId: string; summary: string; ok: boolean; messageId: string }
+  | { kind: 'ORCHESTRATOR_PLAN';  tasks: SubTask[]; messageId: string };
 
 export type BackendMessageKind = BackendMessage['kind'];
 export type FrontendMessageKind = FrontendMessage['kind'];
@@ -103,10 +107,39 @@ export interface ContextPayload {
   activeFile?: ContextFile;
   openFiles: ContextFile[];
   attachedFiles: ContextFile[];   // explicitly attached by the user — included with full content
+  depFiles: ContextFile[];        // auto-discovered from import statements — included with full content
   gitDiff: string;
   workspaceRoot: string;
   selectedText?: string;
   tokenCount: number;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-Agent / Orchestrator Types (multi-agent parallel architecture)
+// ---------------------------------------------------------------------------
+
+/** A single unit of work assigned to one worker agent */
+export interface SubTask {
+  id: string;          // unique within the parent run, e.g. "w1"
+  description: string; // natural-language goal for this worker
+  hint?: string;       // optional suggested first tool call
+}
+
+/** Result returned from a completed worker agent run */
+export interface WorkerResult {
+  taskId: string;
+  ok: boolean;
+  summary: string;     // 1–3 sentence summary of what was accomplished
+  toolResults: Array<{ tool: string; output: string }>;
+  error?: string;
+}
+
+/** Worker status tracked in the frontend for live progress display */
+export interface WorkerStatus {
+  taskId: string;
+  description: string;
+  status: 'pending' | 'running' | 'done' | 'error';
+  summary?: string;
 }
 
 // ---------------------------------------------------------------------------

@@ -63,6 +63,7 @@ export function ChatPanel(): JSX.Element {
 
       <InputBar
         onSend={sendMessage}
+        onCancel={cancelStream}
         disabled={isRunning}
         initialValue={injectedInput}
         onInitialValueConsumed={() => setInjectedInput('')}

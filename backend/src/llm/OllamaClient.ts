@@ -107,6 +107,22 @@ export class OllamaClient {
   }
 
   /**
+   * Generate an embedding vector for a text string.
+   * Uses the /api/embeddings endpoint (non-streaming).
+   * Returns an empty array if the model is not available or an error occurs.
+   */
+  async embed(model: string, text: string, signal?: AbortSignal): Promise<number[]> {
+    const body = JSON.stringify({ model, prompt: text });
+    try {
+      const data = await this.postRequestFull('/api/embeddings', body, signal);
+      const json = JSON.parse(data) as { embedding?: number[] };
+      return json.embedding ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
    * Check if Ollama is running and reachable
    */
   async checkHealth(): Promise<boolean> {
@@ -146,6 +162,49 @@ export class OllamaClient {
         }
 
         resolve(res as AsyncIterable<Buffer>);
+      });
+
+      req.on('error', reject);
+
+      if (signal) {
+        signal.addEventListener('abort', () => {
+          req.destroy();
+          reject(new Error('Request aborted'));
+        });
+      }
+
+      req.write(body);
+      req.end();
+    });
+  }
+
+  /** Non-streaming POST — collects the full response body as a string. */
+  private postRequestFull(path: string, body: string, signal?: AbortSignal): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.baseUrl + path);
+      const isHttps = url.protocol === 'https:';
+      const lib = isHttps ? https : http;
+
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(body),
+        },
+      };
+
+      const req = lib.request(options, (res) => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`Ollama HTTP ${res.statusCode}: ${res.statusMessage}`));
+          return;
+        }
+        let data = '';
+        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
+        res.on('end', () => resolve(data));
+        res.on('error', reject);
       });
 
       req.on('error', reject);

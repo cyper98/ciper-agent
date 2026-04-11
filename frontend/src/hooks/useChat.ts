@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef } from 'react';
-import { ChatMessage, AgentState, BackendMessage, ToolAction, ToolResult } from '@ciper-agent/shared';
+import { ChatMessage, AgentState, BackendMessage, ToolAction, ToolResult, WorkerStatus } from '@ciper-agent/shared';
 import { sendToExtension } from '../vscodeApi';
 import { useVSCodeMessage } from './useVSCodeMessage';
 import { useStreaming } from './useStreaming';
@@ -36,8 +36,15 @@ export function useChat(): UseChatReturn {
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
   const activeMessageId = useRef<string | null>(null);
+  // ID of the current orchestrator-plan chat message (for worker status updates)
+  const orchestratorPlanMsgId = useRef<string | null>(null);
   // Track whether we need to persist the messages after the next state update
   const pendingSaveRef = useRef(false);
+  // Messages queued while agent is running — flushed in order when agent goes IDLE
+  const pendingQueueRef = useRef<Array<{ content: string; mode: 'chat' | 'agent'; attachedFiles?: string[] }>>([]);
+  // Synchronous flag — updated immediately in the AGENT_STATE handler, not via React state.
+  // Used by sendMessage to avoid the stale-closure race where agentState hasn't re-rendered yet.
+  const agentBusyRef = useRef(false);
 
   const { getBuffer, appendToken, clearBuffer, streamVersion } = useStreaming();
 
@@ -116,9 +123,19 @@ export function useChat(): UseChatReturn {
         break;
       }
 
-      case 'AGENT_STATE':
+      case 'AGENT_STATE': {
+        const isNowBusy = msg.state !== 'IDLE' && msg.state !== 'DONE' && msg.state !== 'ERROR';
+        agentBusyRef.current = isNowBusy;
         setAgentState(msg.state);
+        if (msg.state === 'IDLE') orchestratorPlanMsgId.current = null;
+        // Flush one queued message the moment the agent becomes non-busy.
+        // Done here (not in useEffect) so the ref is already current — no stale-state race.
+        if (!isNowBusy && pendingQueueRef.current.length > 0) {
+          const next = pendingQueueRef.current.shift()!;
+          sendToExtension({ kind: 'SEND_MESSAGE', content: next.content, mode: next.mode, attachedFiles: next.attachedFiles });
+        }
         break;
+      }
 
       case 'TOOL_CALL':
         addMessage({
@@ -185,6 +202,60 @@ export function useChat(): UseChatReturn {
       case 'CONTEXT_INFO':
         setContextInfo({ tokenCount: msg.tokenCount, budget: msg.budget });
         break;
+
+      case 'ORCHESTRATOR_PLAN': {
+        // Create a worker-plan message with all workers initially pending
+        orchestratorPlanMsgId.current = msg.messageId;
+        const workerPlan: WorkerStatus[] = msg.tasks.map(t => ({
+          taskId: t.id,
+          description: t.description,
+          status: 'pending' as const,
+        }));
+        addMessage({
+          id: msg.messageId,
+          role: 'tool',
+          content: '',
+          timestamp: Date.now(),
+          workerPlan,
+        });
+        break;
+      }
+
+      case 'WORKER_SPAWNED': {
+        // Set this worker's status to running
+        const planId = orchestratorPlanMsgId.current;
+        if (planId) {
+          setMessages(prev => prev.map(m => {
+            if (m.id !== planId || !m.workerPlan) return m;
+            return {
+              ...m,
+              workerPlan: m.workerPlan.map(w =>
+                w.taskId === msg.taskId ? { ...w, status: 'running' as const } : w
+              ),
+            };
+          }));
+        }
+        break;
+      }
+
+      case 'WORKER_DONE': {
+        // Update this worker's status and summary
+        const planId = orchestratorPlanMsgId.current;
+        if (planId) {
+          setMessages(prev => prev.map(m => {
+            if (m.id !== planId || !m.workerPlan) return m;
+            return {
+              ...m,
+              workerPlan: m.workerPlan.map(w =>
+                w.taskId === msg.taskId
+                  ? { ...w, status: (msg.ok ? 'done' : 'error') as WorkerStatus['status'], summary: msg.summary }
+                  : w
+              ),
+            };
+          }));
+        }
+        break;
+      }
     }
   });
 
@@ -200,7 +271,15 @@ export function useChat(): UseChatReturn {
       saveHistory(next);
       return next;
     });
-    sendToExtension({ kind: 'SEND_MESSAGE', content, mode, attachedFiles });
+    // Use the ref (not React state) to avoid stale-closure races between renders.
+    // agentBusyRef is updated synchronously in the AGENT_STATE message handler.
+    if (agentBusyRef.current) {
+      pendingQueueRef.current.push({ content, mode, attachedFiles });
+    } else {
+      // Optimistically mark as busy so rapid double-sends don't both slip through.
+      agentBusyRef.current = true;
+      sendToExtension({ kind: 'SEND_MESSAGE', content, mode, attachedFiles });
+    }
   }, [saveHistory]);
 
   const cancelStream = useCallback(() => {

@@ -149,6 +149,43 @@
           "type": "boolean",
           "default": true,
           "description": "Show diff preview and require approval before applying file changes"
+        },
+        "ciperAgent.orchestratorModel": {
+          "type": "string",
+          "default": "",
+          "description": "Model used by the orchestrator (circler) agent for planning and synthesis. Defaults to ciperAgent.model if empty. Use a larger model here for better reasoning quality."
+        },
+        "ciperAgent.workerModel": {
+          "type": "string",
+          "default": "",
+          "description": "Lightweight model used by worker sub-agents for focused single tasks. Defaults to ciperAgent.model if empty. Set to a smaller model (e.g. qwen2.5-coder:3b) on machines with limited VRAM."
+        },
+        "ciperAgent.workerNumCtx": {
+          "type": "number",
+          "default": 8192,
+          "description": "Context window (KV cache slots) allocated per worker agent. Set to 4096 on 4 GB VRAM machines to reduce memory usage. Workers handle focused sub-tasks and rarely need large context."
+        },
+        "ciperAgent.maxWorkerAgents": {
+          "type": "number",
+          "default": 4,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Maximum number of worker sub-agents that can run concurrently. Lower this (e.g. 2) on machines with less VRAM to avoid memory pressure."
+        },
+        "ciperAgent.ragEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable semantic RAG context retrieval. Requires an embedding model to be pulled (e.g. `ollama pull nomic-embed-text`). When enabled, relevant code chunks are retrieved and injected into the orchestrator context before planning."
+        },
+        "ciperAgent.embeddingModel": {
+          "type": "string",
+          "default": "nomic-embed-text",
+          "description": "Ollama embedding model used for RAG indexing. Must be pulled separately: `ollama pull nomic-embed-text`. Works on CPU — does not require a GPU."
+        },
+        "ciperAgent.ragTopK": {
+          "type": "number",
+          "default": 10,
+          "description": "Number of code chunks retrieved by RAG per query. Higher values give more context but use more tokens in the orchestrator prompt."
         }
       }
     }

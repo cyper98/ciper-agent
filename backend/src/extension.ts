@@ -1,8 +1,11 @@
 import * as vscode from 'vscode';
 import { OllamaClient } from './llm/OllamaClient';
 import { ModelManager } from './llm/ModelManager';
+import { ModelRouter } from './llm/model-router';
 import { AgentRunner } from './agent/AgentRunner';
 import { ToolExecutor } from './tools/ToolExecutor';
+import { WorkspaceIndexer } from './context/workspace-indexer';
+import { SemanticRetriever } from './context/semantic-retriever';
 import { ReadFileTool } from './tools/ReadFileTool';
 import { WriteFileTool } from './tools/WriteFileTool';
 import { EditFileTool } from './tools/EditFileTool';
@@ -37,6 +40,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const ollamaClient = new OllamaClient(ollamaEndpoint);
   const modelManager = new ModelManager(ollamaClient, context);
+  const modelRouter = new ModelRouter(modelManager);
   const pathGuard = new PathGuard(workspaceRoot);
   const diffEngine = new DiffEngine();
   const diffApplier = new DiffApplier(diffEngine);
@@ -83,13 +87,40 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     runCommand: new RunCommandTool(workspaceRoot),
   });
 
+  // --- RAG (opt-in) ---
+  const ragEnabled = vscode.workspace
+    .getConfiguration('ciperAgent')
+    .get<boolean>('ragEnabled', false);
+
+  let semanticRetriever: SemanticRetriever | undefined;
+
+  if (ragEnabled) {
+    const workspaceIndexer = new WorkspaceIndexer(ollamaClient, workspaceRoot);
+    semanticRetriever = new SemanticRetriever(ollamaClient, workspaceIndexer);
+
+    // Build index in background — does not block activation
+    workspaceIndexer.buildIndex().catch(err => {
+      console.error('Ciper Agent: RAG index failed', err);
+    });
+
+    // Incrementally re-index TypeScript/JS/Python files on save
+    const fileWatcher = vscode.workspace.createFileSystemWatcher(
+      '**/*.{ts,tsx,js,jsx,mjs,py,go,rs,java,cs}'
+    );
+    fileWatcher.onDidChange(uri => workspaceIndexer.reindexFile(uri.fsPath));
+    fileWatcher.onDidCreate(uri => workspaceIndexer.reindexFile(uri.fsPath));
+    context.subscriptions.push(fileWatcher);
+  }
+
   // --- Agent Runner ---
   agentRunner = new AgentRunner(
     ollamaClient,
     modelManager,
+    modelRouter,
     toolExecutor,
     bridge,
-    workspaceRoot
+    workspaceRoot,
+    semanticRetriever
   );
 
   // Now wire the agent runner into the bridge (resolves circular dependency)

@@ -5,6 +5,7 @@ import { ContextPayload, ContextFile } from '@ciper-agent/shared';
 import { TokenBudget, ScoredContent } from './TokenBudget';
 import { FileRanker } from './FileRanker';
 import { getGitDiff } from './GitContextProvider';
+import { resolveLocalImports } from './import-dependency-resolver';
 
 
 export class ContextBuilder {
@@ -45,6 +46,28 @@ export class ContextBuilder {
       if (openFiles.length >= 4) break;
     }
 
+    // 2b. Auto-discover imported local dependency files from the active file.
+    // These are resolved from import/require statements — npm packages are ignored.
+    const depFiles: ContextFile[] = [];
+    if (activeEditor) {
+      const absActivePath = activeEditor.document.fileName;
+      const sourceText = activeEditor.document.getText();
+      const depPaths = resolveLocalImports(sourceText, absActivePath);
+      const depResults = await Promise.all(
+        depPaths.map(async (absPath): Promise<ContextFile | null> => {
+          try {
+            const content = await fs.promises.readFile(absPath, 'utf8');
+            const rel = path.relative(workspaceRoot, absPath);
+            const ext = path.extname(absPath).slice(1) || 'text';
+            return { path: rel, content: this.budget.truncate(content, 1200), language: ext };
+          } catch {
+            return null;
+          }
+        })
+      );
+      depFiles.push(...depResults.filter((f): f is ContextFile => f !== null));
+    }
+
     // 3 & 4. Attached file reads + git diff — run in parallel to avoid blocking the event loop
     const [gitDiff, ...attachedResults] = await Promise.all([
       getGitDiff(workspaceRoot),
@@ -76,6 +99,11 @@ export class ContextBuilder {
       items.push({ content: selectedText, label: 'selection', priority: 90 });
     }
 
+    // Auto-discovered imports get priority between attached (95) and open tabs (60)
+    for (const f of depFiles) {
+      items.push({ content: f.content, label: `dep:${f.path}`, priority: 80 });
+    }
+
     for (const f of openFiles) {
       items.push({ content: f.content, label: `open:${f.path}`, priority: 60 });
     }
@@ -91,6 +119,7 @@ export class ContextBuilder {
       activeFile,
       openFiles,
       attachedFiles: attached,
+      depFiles,
       gitDiff,
       workspaceRoot,
       selectedText,
@@ -119,6 +148,15 @@ export class ContextBuilder {
       for (const f of ctx.attachedFiles) {
         parts.push(
           `\n### Attached File: ${f.path}\n` +
+            '```' + f.language + '\n' + f.content + '\n```'
+        );
+      }
+    }
+
+    if (ctx.depFiles?.length > 0) {
+      for (const f of ctx.depFiles) {
+        parts.push(
+          `\n### Imported Dependency: ${f.path}\n` +
             '```' + f.language + '\n' + f.content + '\n```'
         );
       }

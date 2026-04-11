@@ -3,6 +3,7 @@ import './InputBar.css';
 
 interface InputBarProps {
   onSend: (content: string, mode: 'chat' | 'agent', attachedFiles?: string[]) => void;
+  onCancel?: () => void;
   disabled: boolean;
   initialValue?: string;
   onInitialValueConsumed?: () => void;
@@ -21,6 +22,7 @@ const SLASH_COMMANDS = [
 
 export function InputBar({
   onSend,
+  onCancel,
   disabled,
   initialValue,
   onInitialValueConsumed,
@@ -240,21 +242,28 @@ export function InputBar({
           disabled={disabled}
           rows={1}
         />
-        <button
-          className="input-bar__send-btn"
-          onClick={handleSend}
-          disabled={disabled || !input.trim()}
-          title="Send (Enter)"
-          aria-label="Send"
-        >
-          {disabled ? (
+        {disabled ? (
+          <button
+            className="input-bar__send-btn input-bar__send-btn--stop"
+            onClick={onCancel}
+            title="Stop agent (Escape)"
+            aria-label="Stop"
+          >
             <span className="input-bar__stop-icon">■</span>
-          ) : (
+          </button>
+        ) : (
+          <button
+            className="input-bar__send-btn"
+            onClick={handleSend}
+            disabled={!input.trim()}
+            title="Send (Enter)"
+            aria-label="Send"
+          >
             <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
               <path d="M1 8l14-7-5 7 5 7z"/>
             </svg>
-          )}
-        </button>
+          </button>
+        )}
       </div>
     </div>
   );
@@ -262,7 +271,8 @@ export function InputBar({
 
 function resolveSlashCommand(text: string): { text: string; mode?: 'chat' | 'agent' } {
   if (text.startsWith('/explain ') || text === '/explain') {
-    return { text: `Explain the active file: ${text.slice(8).trim()}`.trimEnd() };
+    // Agent mode so the model can read imported service files via tools
+    return { text: `Explain the active file or selection in detail: ${text.slice(8).trim()}`.trimEnd(), mode: 'agent' };
   }
   if (text.startsWith('/fix ') || text === '/fix') {
     return { text: `Fix the issues in the selected code: ${text.slice(4).trim()}`.trimEnd(), mode: 'agent' };
@@ -271,7 +281,8 @@ function resolveSlashCommand(text: string): { text: string; mode?: 'chat' | 'age
     return { text: `Write comprehensive tests for the active file${text.slice(6) ? ': ' + text.slice(6).trim() : ''}`, mode: 'agent' };
   }
   if (text.startsWith('/review')) {
-    return { text: `Review the active file for bugs, code quality, and improvements${text.slice(7) ? ': ' + text.slice(7).trim() : ''}` };
+    // Agent mode so the model can trace through service implementations
+    return { text: `Review the active file for bugs, code quality, and improvements${text.slice(7) ? ': ' + text.slice(7).trim() : ''}`, mode: 'agent' };
   }
   if (text.startsWith('/docs')) {
     return { text: `Add documentation (JSDoc/docstrings) to the active file${text.slice(5) ? ': ' + text.slice(5).trim() : ''}`, mode: 'agent' };

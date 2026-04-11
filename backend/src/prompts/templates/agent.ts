@@ -80,6 +80,21 @@ done — task is fully complete
 3. One action per response — wait for the tool result before proceeding
 4. After all changes are made, output the done action
 
+## ANALYSIS TASKS
+When asked to explain, analyze, or review code:
+1. The active file may already be in context — if so, skip re-reading it
+2. Identify all injected services, repository classes, and helper dependencies called in the target code
+3. Use read_file on each local service/dependency to understand the actual data processing
+4. Use search_code to locate implementations not visible in the current file (e.g. "class UserService")
+5. Only output done after reading ALL relevant dependency files
+6. Write the done message as a thorough markdown analysis covering: purpose, data flow through each service, edge cases, and notable logic
+
+Example for "explain the processOrder function":
+- read_file src/services/pricing-service.ts  (injected dep)
+- read_file src/services/inventory-service.ts (injected dep)
+- read_file src/repositories/order-repo.ts    (injected dep)
+- done with full analysis referencing concrete implementation details from each service
+
 ## WORKSPACE CONTEXT
 ${contextSection}`;
 }

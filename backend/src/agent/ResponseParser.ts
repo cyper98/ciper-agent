@@ -17,6 +17,15 @@ const ToolActionSchema = z.discriminatedUnion('type', [
     cwd: z.string().optional(),
   }),
   z.object({ type: z.literal('done'), message: z.string() }),
+  // Orchestrator-only: decompose task into parallel sub-agents
+  z.object({
+    type: z.literal('sub_tasks'),
+    tasks: z.array(z.object({
+      id: z.string().min(1),
+      description: z.string().min(1),
+      hint: z.string().optional(),
+    })).min(1),
+  }),
 ]);
 
 const AgentResponseSchema = z.object({
@@ -31,7 +40,27 @@ export class ResponseParser {
     const jsonStr = this.extractJson(raw);
     const sanitized = this.sanitizeControlChars(jsonStr);
     const parsed = JSON.parse(sanitized);
+    // Normalize common LLM field-name variants before strict schema validation
+    if (parsed?.action && typeof parsed.action === 'object') {
+      this.normalizeAction(parsed.action as Record<string, unknown>);
+    }
     return AgentResponseSchema.parse(parsed);
+  }
+
+  /**
+   * Map common LLM path-field aliases to the required "path" key.
+   * Models frequently emit "file", "filename", "filepath" etc. instead of "path".
+   */
+  private normalizeAction(action: Record<string, unknown>): void {
+    if ('path' in action) return;
+    const PATH_ALIASES = ['file', 'filename', 'filepath', 'filePath', 'file_path'];
+    for (const alias of PATH_ALIASES) {
+      if (alias in action) {
+        action.path = action[alias];
+        delete action[alias];
+        return;
+      }
+    }
   }
 
   /**

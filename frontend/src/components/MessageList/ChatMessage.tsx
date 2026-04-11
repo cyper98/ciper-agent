@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChatMessage as ChatMessageType } from '@ciper-agent/shared';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { DiffViewer } from '../DiffViewer/DiffViewer';
+import { WorkerProgressGroup } from '../WorkerProgress/WorkerProgressGroup';
 
 interface ChatMessageProps {
   message: ChatMessageType;
@@ -26,6 +27,15 @@ export function ChatMessage({
       setTimeout(() => setCopied(false), 1500);
     });
   };
+
+  // Worker-plan message: render inline sub-agent progress group
+  if (message.workerPlan) {
+    return (
+      <div className="msg msg--tool">
+        <WorkerProgressGroup workers={message.workerPlan} />
+      </div>
+    );
+  }
 
   // Diff preview MUST be checked before role check — diff messages have role='tool'
   // but need to render as DiffViewer, not ToolMessage.
