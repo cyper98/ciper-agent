@@ -6,6 +6,7 @@ import { TokenBudget, ScoredContent } from './TokenBudget';
 import { FileRanker } from './FileRanker';
 import { getGitDiff } from './GitContextProvider';
 
+
 export class ContextBuilder {
   private fileRanker = new FileRanker();
 
@@ -44,25 +45,21 @@ export class ContextBuilder {
       if (openFiles.length >= 4) break;
     }
 
-    // 3. Explicitly attached files — read from disk with generous budget
-    const attached: ContextFile[] = [];
-    for (const relPath of attachedFiles) {
-      try {
-        const absPath = path.resolve(workspaceRoot, relPath);
-        const content = fs.readFileSync(absPath, 'utf8');
-        const ext = path.extname(relPath).slice(1) || 'text';
-        attached.push({
-          path: relPath,
-          content: this.budget.truncate(content, 4000),
-          language: ext,
-        });
-      } catch {
-        // File not readable — skip silently
-      }
-    }
-
-    // 4. Git diff
-    const gitDiff = getGitDiff(workspaceRoot);
+    // 3 & 4. Attached file reads + git diff — run in parallel to avoid blocking the event loop
+    const [gitDiff, ...attachedResults] = await Promise.all([
+      getGitDiff(workspaceRoot),
+      ...attachedFiles.map(async (relPath): Promise<ContextFile | null> => {
+        try {
+          const absPath = path.resolve(workspaceRoot, relPath);
+          const content = await fs.promises.readFile(absPath, 'utf8');
+          const ext = path.extname(relPath).slice(1) || 'text';
+          return { path: relPath, content: this.budget.truncate(content, 4000), language: ext };
+        } catch {
+          return null; // File not readable — skip silently
+        }
+      }),
+    ]);
+    const attached = attachedResults.filter((f): f is ContextFile => f !== null);
 
     // 5. Fit into token budget
     const items: ScoredContent[] = [];

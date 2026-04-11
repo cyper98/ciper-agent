@@ -18,6 +18,19 @@ interface OllamaTagsResponse {
   models: Array<{ name: string; modified_at: string; size: number }>;
 }
 
+export interface LlmCallOptions {
+  /** KV cache slots allocated by Ollama. Match to actual prompt size for speed. Default: 8192 */
+  numCtx?: number;
+  /** Max output tokens. -1 = unlimited. Cap agent calls to avoid wasted generation. Default: -1 */
+  numPredict?: number;
+  /**
+   * Keep model loaded after request. Use a number (seconds) or duration string ("5m", "1h").
+   * -1 (number) = keep forever (Ollama special sentinel). Default: -1.
+   * NOTE: must be a number or valid Go duration string — bare string "-1" is NOT valid.
+   */
+  keepAlive?: number | string;
+}
+
 export class OllamaClient {
   private baseUrl: string;
 
@@ -33,17 +46,19 @@ export class OllamaClient {
     model: string,
     messages: OllamaChatMessage[],
     signal?: AbortSignal,
-    format?: 'json'          // when 'json': Ollama uses constrained generation → always valid JSON structure
+    format?: 'json',         // when 'json': Ollama uses constrained generation → always valid JSON structure
+    opts?: LlmCallOptions
   ): AsyncGenerator<string> {
     const body = JSON.stringify({
       model,
       messages,
       stream: true,
+      keep_alive: opts?.keepAlive ?? -1,   // -1 (number) = keep forever; Ollama maps int -1 → MaxInt64
       ...(format ? { format } : {}),
       options: {
-        num_predict: -1,   // unlimited output — prevents truncated JSON on large files
-        num_ctx: 32768,    // large context window — prevents input overflow
-        temperature: 0.1,  // deterministic — reduces hallucinated JSON keys
+        num_predict: opts?.numPredict ?? -1,
+        num_ctx: opts?.numCtx ?? 8192,       // sized to actual usage; callers set appropriate value
+        temperature: 0.1,                    // deterministic — reduces hallucinated JSON keys
       },
     });
 

@@ -1,10 +1,12 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { OllamaClient } from '../llm/OllamaClient';
+import { OllamaClient, LlmCallOptions } from '../llm/OllamaClient';
 import { ModelManager } from '../llm/ModelManager';
 import { buildCompletionPrompt, buildChatCompletionPrompt } from '../prompts/templates/completion';
 
 const COMPLETION_TIMEOUT_MS = 2000;
+// Small context window for completions — prefix ≤ 50 lines + suffix + prompt overhead
+const COMPLETION_LLM_OPTS: LlmCallOptions = { numCtx: 4096, numPredict: 200, keepAlive: -1 };
 
 export class InlineCompletionProvider implements vscode.InlineCompletionItemProvider {
   private debounceTimer?: ReturnType<typeof setTimeout>;
@@ -107,12 +109,14 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
           const messages = [{ role: 'user' as const, content: prompt }];
 
           let result = '';
-          for await (const token of this.ollamaClient.streamChat(
+          for await (const chunk of this.ollamaClient.streamChat(
             model,
             messages,
-            abortController.signal
+            abortController.signal,
+            undefined,
+            COMPLETION_LLM_OPTS
           )) {
-            result += token;
+            result += chunk;
             // Stop if we have a reasonable completion (newline or 100 chars)
             if (result.includes('\n\n') || result.length > 200) break;
           }

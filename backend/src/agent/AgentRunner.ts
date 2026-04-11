@@ -1,16 +1,27 @@
 import * as vscode from 'vscode';
-import { OllamaClient, OllamaChatMessage } from '../llm/OllamaClient';
+import { OllamaClient, OllamaChatMessage, LlmCallOptions } from '../llm/OllamaClient';
 import { ModelManager } from '../llm/ModelManager';
 import { AgentStateMachine } from './AgentStateMachine';
 import { ResponseParser } from './ResponseParser';
 import { RetryStrategy } from './RetryStrategy';
+import { ThoughtExtractor } from './ThoughtExtractor';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { ContextBuilder } from '../context/ContextBuilder';
 import { TokenBudget } from '../context/TokenBudget';
-import { buildSystemPrompt } from '../prompts/SystemPrompt';
+import { buildSystemPrompt, buildChatPrompt } from '../prompts/SystemPrompt';
 import { MessageBridge } from '../webview/MessageBridge';
 import { DiffApprovalRegistry } from '../tools/DiffApprovalRegistry';
 import { ToolAction } from '@ciper-agent/shared';
+
+// Max conversation turns kept in memory — oldest pairs dropped beyond this limit
+const MAX_HISTORY_TURNS = 20;
+
+// LLM call options per mode — sized to actual usage to minimise KV cache allocation.
+// Agent numCtx: system prompt (~1K) + context budget (8192) + MAX_HISTORY_TURNS tool results
+// (up to ~12K on long runs) = ~21K peak. 24576 gives comfortable headroom without the
+// full 32K waste. Chat numPredict left unlimited; agent capped at 2048 (JSON responses are bounded).
+const AGENT_LLM_OPTS: LlmCallOptions = { numCtx: 24576, numPredict: 2048, keepAlive: -1 };
+const CHAT_LLM_OPTS:  LlmCallOptions = { numCtx: 24576, numPredict:   -1, keepAlive: -1 };
 
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -88,6 +99,14 @@ export class AgentRunner {
     this.conversationHistory = [];
   }
 
+  /** Drop oldest turns when history exceeds MAX_HISTORY_TURNS pairs. */
+  private pruneHistory(): void {
+    const maxMessages = MAX_HISTORY_TURNS * 2;
+    if (this.conversationHistory.length > maxMessages) {
+      this.conversationHistory = this.conversationHistory.slice(-maxMessages);
+    }
+  }
+
   approveDiff(diffId: string): void {
     DiffApprovalRegistry.resolve(diffId, true);
   }
@@ -125,7 +144,8 @@ export class AgentRunner {
         budget: 8192,
       });
 
-      const systemPrompt = buildSystemPrompt(context, this.contextBuilder);
+      // Chat mode uses a conversational prompt — no JSON output rules
+      const systemPrompt = buildChatPrompt(context, this.contextBuilder);
       // Fresh system message each call so context reflects current workspace state,
       // followed by the full accumulated conversation history.
       const messages: OllamaChatMessage[] = [
@@ -140,7 +160,9 @@ export class AgentRunner {
       for await (const token of this.ollamaClient.streamChat(
         this.modelManager.getSelectedModel(),
         messages,
-        signal
+        signal,
+        undefined,
+        CHAT_LLM_OPTS
       )) {
         fullResponse += token;
         this.bridge.send({ kind: 'STREAM_TOKEN', token, messageId });
@@ -148,11 +170,12 @@ export class AgentRunner {
 
       this.bridge.send({ kind: 'STREAM_DONE', messageId });
 
-      // Persist this turn into conversation history
+      // Persist this turn into conversation history and prune if needed
       this.conversationHistory.push(
         { role: 'user', content: userMessage },
         { role: 'assistant', content: fullResponse }
       );
+      this.pruneHistory();
 
       this.sm.transition('OBSERVE');
       this.sm.transition('REFLECT');
@@ -221,16 +244,28 @@ export class AgentRunner {
 
         this.sm.transition('ACT');
 
-        // Buffer the LLM response silently — do NOT stream raw JSON tokens to the UI.
-        // The user will see only the extracted "thought" after parsing succeeds.
+        // Stream the LLM response while extracting the "thought" field incrementally
+        // so the user sees it in real-time instead of waiting for the full JSON.
+        const extractor = new ThoughtExtractor();
         let rawResponse = '';
+        let thoughtMsgId: string | null = null;
+
         for await (const token of this.ollamaClient.streamChat(
           this.modelManager.getSelectedModel(),
           history,
           signal,
-          'json'
+          'json',
+          AGENT_LLM_OPTS
         )) {
           rawResponse += token;
+          const chars = extractor.push(token);
+          if (chars !== null) {
+            if (!thoughtMsgId) { thoughtMsgId = generateId(); }
+            this.bridge.send({ kind: 'STREAM_TOKEN', token: chars, messageId: thoughtMsgId });
+          }
+        }
+        if (thoughtMsgId) {
+          this.bridge.send({ kind: 'STREAM_DONE', messageId: thoughtMsgId });
         }
 
         this.sm.transition('OBSERVE');
@@ -255,7 +290,8 @@ export class AgentRunner {
               this.modelManager.getSelectedModel(),
               messages,
               signal,
-              'json'
+              'json',
+              AGENT_LLM_OPTS
             )) {
               response += token;
             }
@@ -263,10 +299,12 @@ export class AgentRunner {
           }
         );
 
-        // Send only the thought to the user — not the raw JSON.
-        const thoughtId = generateId();
-        this.bridge.send({ kind: 'STREAM_TOKEN', token: parsed.thought, messageId: thoughtId });
-        this.bridge.send({ kind: 'STREAM_DONE', messageId: thoughtId });
+        // Only send thought if streaming extraction didn't already deliver it
+        if (!thoughtMsgId) {
+          const thoughtId = generateId();
+          this.bridge.send({ kind: 'STREAM_TOKEN', token: parsed.thought, messageId: thoughtId });
+          this.bridge.send({ kind: 'STREAM_DONE', messageId: thoughtId });
+        }
 
         // Check if done
         if (parsed.action.type === 'done') {
@@ -276,6 +314,7 @@ export class AgentRunner {
           // Use finalResponse (valid JSON) not rawResponse (may be broken)
           newTurns.push({ role: 'assistant', content: finalResponse });
           this.conversationHistory.push(...newTurns);
+          this.pruneHistory();
           historyCommitted = true;
           this.sm.transition('REFLECT');
           this.sm.transition('DONE');
@@ -305,6 +344,7 @@ export class AgentRunner {
       // Persist turns if the loop ended without a 'done' action (hit maxIterations)
       if (!historyCommitted) {
         this.conversationHistory.push(...newTurns);
+        this.pruneHistory();
       }
     } catch (err) {
       if ((err as Error).message === 'Request aborted') return;
@@ -314,6 +354,8 @@ export class AgentRunner {
         error: (err as Error).message,
         messageId: errId,
       });
+      // Intentionally do NOT commit newTurns on error — the model never completed the task,
+      // so partial tool-result turns would confuse the next run. The user retries from a clean slate.
       this.sm.transition('ERROR');
     } finally {
       this.sm.reset();

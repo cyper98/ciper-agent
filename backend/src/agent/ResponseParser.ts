@@ -36,17 +36,32 @@ export class ResponseParser {
 
   /**
    * Extract the outermost JSON object from raw text.
-   * Correctly handles braces/quotes inside string values so code content
-   * (e.g. Go `func main() { ... }`) does not confuse the depth counter.
+   * - Strips a leading code fence (```json / ```javascript / ```) only when the
+   *   response itself starts with one — avoids false matches on fences that appear
+   *   *inside* JSON string values (e.g. write_file content with markdown examples).
+   * - Always applies brace/quote depth tracking so preamble text before the `{`
+   *   (e.g. "\nUser → Ciper: ...") is skipped correctly in both fence and no-fence paths.
    */
   private extractJson(raw: string): string {
-    // Strip markdown code fences: ```json ... ``` or ``` ... ```
-    const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fenceMatch) {
-      return fenceMatch[1].trim();
+    let text = raw.trim();
+
+    // Only strip the outer fence if the response itself starts with ```
+    // Use indexOf (not lastIndexOf) for the close fence so an embedded ``` inside
+    // a JSON string value (e.g. write_file content) does not truncate the object.
+    if (text.startsWith('```')) {
+      const firstNewline = text.indexOf('\n');
+      const closeFence = firstNewline !== -1 ? text.indexOf('\n```', firstNewline + 1) : -1;
+      if (firstNewline !== -1 && closeFence > firstNewline) {
+        text = text.slice(firstNewline + 1, closeFence).trim();
+      } else if (firstNewline !== -1) {
+        // Opening fence line only (no closing fence found) — strip the first line
+        text = text.slice(firstNewline + 1).trim();
+      }
     }
 
-    const start = raw.indexOf('{');
+    // Find and extract the outermost JSON object via brace depth tracking.
+    // This correctly skips any prose before { and handles braces/quotes inside strings.
+    const start = text.indexOf('{');
     if (start === -1) {
       throw new Error('No JSON object found in response');
     }
@@ -55,19 +70,18 @@ export class ResponseParser {
     let inString = false;
     let i = start;
 
-    while (i < raw.length) {
-      const ch = raw[i];
+    while (i < text.length) {
+      const ch = text[i];
 
       if (inString) {
         if (ch === '\\') {
-          i += 2; // skip the escaped character entirely
+          i += 2; // skip escaped character entirely
           continue;
         }
         if (ch === '"') {
           inString = false;
         }
-        // Any other character (including raw newlines) is inside a string —
-        // we ignore it for depth counting; sanitizeControlChars fixes it later.
+        // Raw control chars inside strings are handled by sanitizeControlChars later
       } else {
         if (ch === '"') {
           inString = true;
@@ -76,7 +90,7 @@ export class ResponseParser {
         } else if (ch === '}') {
           depth--;
           if (depth === 0) {
-            return raw.slice(start, i + 1);
+            return text.slice(start, i + 1);
           }
         }
       }
