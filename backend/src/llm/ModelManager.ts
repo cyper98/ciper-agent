@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from './OllamaClient';
+import { LlmProvider } from './providers/LlmProvider';
 import { MessageBridge } from '../webview/MessageBridge';
 
 export class ModelManager {
@@ -7,7 +7,7 @@ export class ModelManager {
   private selectedModel: string;
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private provider: LlmProvider,
     private context: vscode.ExtensionContext
   ) {
     this.selectedModel = vscode.workspace
@@ -16,26 +16,23 @@ export class ModelManager {
   }
 
   async initialize(): Promise<void> {
-    const healthy = await this.ollamaClient.checkHealth();
+    const healthy = await this.provider.isAvailable();
     if (!healthy) {
       vscode.window.showWarningMessage(
-        'Ciper Agent: Cannot reach Ollama at ' +
-          vscode.workspace
-            .getConfiguration('ciperAgent')
-            .get('ollamaEndpoint', 'http://localhost:11434') +
-          '. Start Ollama and reload.'
+        'Ciper Agent: LLM provider not available. Check settings.'
       );
       return;
     }
 
     try {
-      this.models = await this.ollamaClient.listModels();
+      const modelInfos = await this.provider.listModels();
+      this.models = modelInfos.map(m => m.name);
       if (this.models.length > 0 && !this.models.includes(this.selectedModel)) {
         this.selectedModel = this.models[0];
       }
     } catch (err) {
       vscode.window.showErrorMessage(
-        `Ciper Agent: Failed to list Ollama models: ${(err as Error).message}`
+        `Ciper Agent: Failed to list models: ${(err as Error).message}`
       );
     }
   }
@@ -72,7 +69,8 @@ export class ModelManager {
 
   async refreshModels(bridge?: MessageBridge): Promise<void> {
     try {
-      this.models = await this.ollamaClient.listModels();
+      const modelInfos = await this.provider.listModels();
+      this.models = modelInfos.map(m => m.name);
       if (bridge) {
         this.sendModelsTo(bridge);
       }

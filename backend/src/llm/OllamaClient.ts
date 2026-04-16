@@ -1,6 +1,8 @@
 import * as http from 'http';
 import * as https from 'https';
 import { StreamParser } from './StreamParser';
+import { llmCache } from './LlmCache';
+import { LlmProvider, ChatMessage, ModelInfo, LlmProviderConfig } from './providers/LlmProvider';
 
 export interface OllamaChatMessage {
   role: 'system' | 'user' | 'assistant' | 'tool';
@@ -19,46 +21,75 @@ interface OllamaTagsResponse {
 }
 
 export interface LlmCallOptions {
-  /** KV cache slots allocated by Ollama. Match to actual prompt size for speed. Default: 8192 */
   numCtx?: number;
-  /** Max output tokens. -1 = unlimited. Cap agent calls to avoid wasted generation. Default: -1 */
   numPredict?: number;
-  /**
-   * Keep model loaded after request. Use a number (seconds) or duration string ("5m", "1h").
-   * -1 (number) = keep forever (Ollama special sentinel). Default: -1.
-   * NOTE: must be a number or valid Go duration string — bare string "-1" is NOT valid.
-   */
   keepAlive?: number | string;
 }
 
-export class OllamaClient {
+export class OllamaClient implements LlmProvider {
+  readonly name = 'ollama';
+  readonly defaultModels = ['qwen2.5-coder:7b', 'llama3:8b', 'mistral:7b', 'codellama:7b'];
   private baseUrl: string;
 
-  constructor(baseUrl = 'http://localhost:11434') {
-    this.baseUrl = baseUrl.replace(/\/$/, '');
+  constructor(config: LlmProviderConfig = {}) {
+    this.baseUrl = (config.endpoint || 'http://localhost:11434').replace(/\/$/, '');
   }
 
-  /**
-   * Stream a chat completion. Yields individual token strings.
-   * Uses Node.js http module directly for proper streaming in the extension host.
-   */
+  async isAvailable(): Promise<boolean> {
+    try {
+      return await this.checkHealth();
+    } catch {
+      return false;
+    }
+  }
+
+  async listModels(): Promise<ModelInfo[]> {
+    const models = await this.listRawModels();
+    return models.map(m => ({
+      id: m,
+      name: m,
+      provider: 'ollama'
+    }));
+  }
+
+  async listRawModels(): Promise<string[]> {
+    try {
+      const data = await this.getRequest('/api/tags');
+      const json = JSON.parse(data) as OllamaTagsResponse;
+      return json.models.map(m => m.name).sort();
+    } catch (err) {
+      console.error('Ollama listModels error:', err);
+      return [];
+    }
+  }
+
   async *streamChat(
     model: string,
     messages: OllamaChatMessage[],
     signal?: AbortSignal,
-    format?: 'json',         // when 'json': Ollama uses constrained generation → always valid JSON structure
+    _format?: string,
     opts?: LlmCallOptions
   ): AsyncGenerator<string> {
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content ?? '';
+    const cachedResponse = llmCache.get(lastUserMessage, model);
+    
+    if (cachedResponse) {
+      for (const char of cachedResponse) {
+        if (signal?.aborted) return;
+        yield char;
+      }
+      return;
+    }
+
     const body = JSON.stringify({
       model,
-      messages,
+      messages: this.convertMessages(messages),
       stream: true,
-      keep_alive: opts?.keepAlive ?? -1,   // -1 (number) = keep forever; Ollama maps int -1 → MaxInt64
-      ...(format ? { format } : {}),
+      keep_alive: -1,
       options: {
-        num_predict: opts?.numPredict ?? -1,
-        num_ctx: opts?.numCtx ?? 8192,       // sized to actual usage; callers set appropriate value
-        temperature: 0.1,                    // deterministic — reduces hallucinated JSON keys
+        num_predict: -1,
+        num_ctx: 8192,
+        temperature: 0.1,
       },
     });
 
@@ -82,35 +113,28 @@ export class OllamaClient {
     }
   }
 
-  /**
-   * Non-streaming chat (used for reflection/checks that need a full response)
-   */
   async chat(
     model: string,
     messages: OllamaChatMessage[],
     signal?: AbortSignal
   ): Promise<string> {
+    const lastUserMessage = messages.filter(m => m.role === 'user').pop()?.content ?? '';
+    const cachedResponse = llmCache.get(lastUserMessage, model);
+    if (cachedResponse) {
+      return cachedResponse;
+    }
+
     let result = '';
     for await (const token of this.streamChat(model, messages, signal)) {
       result += token;
     }
+    
+    if (result.length >= 10) {
+      llmCache.set(lastUserMessage, model, result);
+    }
     return result;
   }
 
-  /**
-   * List available models from Ollama
-   */
-  async listModels(): Promise<string[]> {
-    const data = await this.getRequest('/api/tags');
-    const json = JSON.parse(data) as OllamaTagsResponse;
-    return json.models.map(m => m.name).sort();
-  }
-
-  /**
-   * Generate an embedding vector for a text string.
-   * Uses the /api/embeddings endpoint (non-streaming).
-   * Returns an empty array if the model is not available or an error occurs.
-   */
   async embed(model: string, text: string, signal?: AbortSignal): Promise<number[]> {
     const body = JSON.stringify({ model, prompt: text });
     try {
@@ -122,9 +146,6 @@ export class OllamaClient {
     }
   }
 
-  /**
-   * Check if Ollama is running and reachable
-   */
   async checkHealth(): Promise<boolean> {
     try {
       await this.getRequest('/api/version');
@@ -132,6 +153,50 @@ export class OllamaClient {
     } catch {
       return false;
     }
+  }
+
+  private convertMessages(messages: ChatMessage[]): OllamaChatMessage[] {
+    return messages.map(m => ({
+      role: m.role === 'tool' ? 'assistant' : m.role,
+      content: m.content,
+    }));
+  }
+
+  private getRequest(path: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(this.baseUrl + path);
+      const isHttps = url.protocol === 'https:';
+      const lib = isHttps ? https : http;
+
+      const options: http.RequestOptions = {
+        hostname: url.hostname,
+        port: url.port || (isHttps ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'GET',
+        headers: { 'Accept': 'application/json' },
+        timeout: 10000,
+      };
+
+      const req = lib.request(options, res => {
+        let data = '';
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
+      });
+
+      req.on('error', reject);
+      req.end();
+    });
   }
 
   private postRequest(
@@ -153,33 +218,34 @@ export class OllamaClient {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
         },
+        timeout: 120000,
       };
 
-      const req = lib.request(options, (res) => {
-        if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`Ollama HTTP ${res.statusCode}: ${res.statusMessage}`));
-          return;
-        }
+      const req = lib.request(options, res => {
+        resolve(this.createAsyncIterable(res));
+      });
 
-        resolve(res as AsyncIterable<Buffer>);
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
       });
 
       req.on('error', reject);
-
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          req.destroy();
-          reject(new Error('Request aborted'));
-        });
-      }
+      signal?.addEventListener('abort', () => {
+        req.destroy();
+        reject(new Error('Request aborted'));
+      });
 
       req.write(body);
       req.end();
     });
   }
 
-  /** Non-streaming POST — collects the full response body as a string. */
-  private postRequestFull(path: string, body: string, signal?: AbortSignal): Promise<string> {
+  private postRequestFull(
+    path: string,
+    body: string,
+    signal?: AbortSignal
+  ): Promise<string> {
     return new Promise((resolve, reject) => {
       const url = new URL(this.baseUrl + path);
       const isHttps = url.protocol === 'https:';
@@ -194,45 +260,77 @@ export class OllamaClient {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body),
         },
+        timeout: 120000,
       };
 
-      const req = lib.request(options, (res) => {
-        if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`Ollama HTTP ${res.statusCode}: ${res.statusMessage}`));
-          return;
-        }
+      const req = lib.request(options, res => {
         let data = '';
-        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
-        res.on('end', () => resolve(data));
-        res.on('error', reject);
+        res.on('data', chunk => data += chunk);
+        res.on('end', () => {
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(data);
+          } else {
+            reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timeout'));
       });
 
       req.on('error', reject);
-
-      if (signal) {
-        signal.addEventListener('abort', () => {
-          req.destroy();
-          reject(new Error('Request aborted'));
-        });
-      }
+      signal?.addEventListener('abort', () => {
+        req.destroy();
+        reject(new Error('Request aborted'));
+      });
 
       req.write(body);
       req.end();
     });
   }
 
-  private getRequest(path: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const url = new URL(this.baseUrl + path);
-      const isHttps = url.protocol === 'https:';
-      const lib = isHttps ? https : http;
+  private createAsyncIterable(res: http.IncomingMessage): AsyncIterable<Buffer> {
+    return {
+      [Symbol.asyncIterator]: () => {
+        const chunks: Buffer[] = [];
+        let resolver: ((chunk: Buffer) => void) | null = null;
+        let ended = false;
 
-      lib.get(url.href, (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => (data += chunk.toString()));
-        res.on('end', () => resolve(data));
-        res.on('error', reject);
-      }).on('error', reject);
-    });
+        res.on('data', chunk => {
+          if (resolver) {
+            resolver(chunk);
+            resolver = null;
+          } else {
+            chunks.push(chunk);
+          }
+        });
+
+        res.on('end', () => {
+          ended = true;
+          resolver?.(Buffer.from([]));
+        });
+
+        res.on('error', err => {
+          ended = true;
+          resolver?.(Buffer.from([]));
+        });
+
+        return {
+          next: async (): Promise<IteratorResult<Buffer>> => {
+            if (chunks.length > 0) {
+              return { done: false, value: chunks.shift()! };
+            }
+            if (ended) {
+              return { done: true, value: Buffer.from([]) };
+            }
+            return new Promise(resolve => {
+              resolver = chunk => resolve({ done: false, value: chunk });
+            });
+          }
+        };
+      }
+    };
   }
 }

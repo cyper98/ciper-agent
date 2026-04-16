@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OllamaClient, OllamaChatMessage, LlmCallOptions } from '../llm/OllamaClient';
+import { LlmProvider, ChatMessage, LlmCallOptions } from '../llm/providers/LlmProvider';
 import { ModelManager } from '../llm/ModelManager';
 import { ModelRouter } from '../llm/model-router';
 import { AgentStateMachine } from './AgentStateMachine';
@@ -7,10 +7,12 @@ import { OrchestratorAgent } from './orchestrator-agent';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { ContextBuilder } from '../context/ContextBuilder';
 import { TokenBudget } from '../context/TokenBudget';
+import { SemanticChunker } from '../context/SemanticChunker';
 import { buildChatPrompt } from '../prompts/SystemPrompt';
 import { MessageBridge } from '../webview/MessageBridge';
 import { DiffApprovalRegistry } from '../tools/DiffApprovalRegistry';
 import { SemanticRetriever } from '../context/semantic-retriever';
+import { ChatMessage as SharedChatMessage } from '@ciper-agent/shared';
 
 // Max conversation turns kept in memory — oldest pairs dropped beyond this limit
 const MAX_HISTORY_TURNS = 20;
@@ -27,11 +29,13 @@ export class AgentRunner {
   private sm = new AgentStateMachine();
   private abortController: AbortController | null = null;
   private contextBuilder: ContextBuilder;
+  private historyChunker = new SemanticChunker();
+  private budget: TokenBudget;
   // Persistent multi-turn conversation history (user+assistant turns only, no system message)
-  private conversationHistory: OllamaChatMessage[] = [];
+  private conversationHistory: ChatMessage[] = [];
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private modelManager: ModelManager,
     private modelRouter: ModelRouter,
     private toolExecutor: ToolExecutor,
@@ -39,12 +43,12 @@ export class AgentRunner {
     private workspaceRoot: string,
     private semanticRetriever?: SemanticRetriever  // optional — only present when ragEnabled
   ) {
-    const budget = new TokenBudget(
+    this.budget = new TokenBudget(
       vscode.workspace
         .getConfiguration('ciperAgent')
         .get<number>('contextTokenBudget', 8192)
     );
-    this.contextBuilder = new ContextBuilder(budget);
+    this.contextBuilder = new ContextBuilder(this.budget, llmProvider, modelManager);
 
     // Propagate state changes to the webview
     this.sm.onStateChange((state, detail) => {
@@ -66,12 +70,51 @@ export class AgentRunner {
     this.conversationHistory = [];
   }
 
-  /** Drop oldest turns when history exceeds MAX_HISTORY_TURNS pairs. */
+  loadHistory(messages: ChatMessage[]): void {
+    this.conversationHistory = messages.map(m => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
+  }
+
+  /** Drop oldest turns when history exceeds MAX_HISTORY_TURNS pairs.
+   *  Uses semantic compression to preserve important context while reducing size.
+   */
   private pruneHistory(): void {
     const maxMessages = MAX_HISTORY_TURNS * 2;
     if (this.conversationHistory.length > maxMessages) {
-      this.conversationHistory = this.conversationHistory.slice(-maxMessages);
+      const kept = this.conversationHistory.slice(-maxMessages);
+      
+      // Compress older messages beyond the last N turns
+      const compressedHistory: ChatMessage[] = [];
+      const recentTurns = kept;
+      
+      for (let i = 0; i < recentTurns.length; i += 2) {
+        const userMsg = recentTurns[i];
+        const assistantMsg = recentTurns[i + 1];
+        
+        // First few turns keep full content
+        if (i < 4) {
+          compressedHistory.push(userMsg, assistantMsg);
+          continue;
+        }
+        
+        // Compress older turns semantically
+        const userCompressed = this.compressMessage(userMsg);
+        const assistantCompressed = this.compressMessage(assistantMsg);
+        
+        compressedHistory.push(userCompressed, assistantCompressed);
+      }
+      
+      this.conversationHistory = compressedHistory;
     }
+  }
+
+  /** Compress a single message using semantic chunking. */
+  private compressMessage(msg: ChatMessage): ChatMessage {
+    const maxTokens = 256;
+    const { text } = this.historyChunker.truncateWithSemantics(msg.content, maxTokens);
+    return { ...msg, content: text };
   }
 
   approveDiff(diffId: string): void {
@@ -103,6 +146,7 @@ export class AgentRunner {
         workspaceRoot: this.workspaceRoot,
         selectedText: this.getSelectedText(),
         attachedFiles,
+        query: userMessage,
       });
 
       this.bridge.send({
@@ -115,7 +159,7 @@ export class AgentRunner {
       const systemPrompt = buildChatPrompt(context, this.contextBuilder);
       // Fresh system message each call so context reflects current workspace state,
       // followed by the full accumulated conversation history.
-      const messages: OllamaChatMessage[] = [
+      const messages: ChatMessage[] = [
         { role: 'system', content: systemPrompt },
         ...this.conversationHistory,
         { role: 'user', content: userMessage },
@@ -124,7 +168,7 @@ export class AgentRunner {
       this.sm.transition('ACT');
 
       let fullResponse = '';
-      for await (const token of this.ollamaClient.streamChat(
+      for await (const token of this.llmProvider.streamChat(
         this.modelManager.getSelectedModel(),
         messages,
         signal,
@@ -184,6 +228,7 @@ export class AgentRunner {
         workspaceRoot: this.workspaceRoot,
         selectedText: this.getSelectedText(),
         attachedFiles,
+        query: userMessage,
       });
 
       this.bridge.send({
@@ -203,7 +248,7 @@ export class AgentRunner {
 
       // Delegate the full iteration loop to the OrchestratorAgent
       const orchestrator = new OrchestratorAgent(
-        this.ollamaClient,
+        this.llmProvider,
         this.modelRouter,
         this.toolExecutor,
         this.bridge,

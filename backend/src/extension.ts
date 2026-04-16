@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import { OllamaClient } from './llm/OllamaClient';
+import { ProviderManager } from './llm/ProviderManager';
 import { ModelManager } from './llm/ModelManager';
 import { ModelRouter } from './llm/model-router';
 import { AgentRunner } from './agent/AgentRunner';
@@ -34,16 +35,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     .get<boolean>('requireApprovalForEdits', true);
 
   // --- Infrastructure ---
-  const ollamaEndpoint = vscode.workspace
-    .getConfiguration('ciperAgent')
-    .get<string>('ollamaEndpoint', 'http://localhost:11434');
+  const providerManager = new ProviderManager();
+  const llmProvider = providerManager.getCurrentProvider();
+  await providerManager.initialize();
 
-  const ollamaClient = new OllamaClient(ollamaEndpoint);
-  const modelManager = new ModelManager(ollamaClient, context);
+  const modelManager = new ModelManager(llmProvider, context);
   const modelRouter = new ModelRouter(modelManager);
   const pathGuard = new PathGuard(workspaceRoot);
   const diffEngine = new DiffEngine();
-  const diffApplier = new DiffApplier(diffEngine);
+  const diffApplier = new DiffApplier(diffEngine, workspaceRoot);
 
   // --- Webview ---
   const webviewManager = new WebviewManager(context);
@@ -52,7 +52,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     null as unknown as AgentRunner,
     modelManager,
     webviewManager,
-    context
+    context,
+    providerManager
   );
 
   // Register bridge BEFORE the view provider so it is wired up the moment
@@ -95,8 +96,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   let semanticRetriever: SemanticRetriever | undefined;
 
   if (ragEnabled) {
-    const workspaceIndexer = new WorkspaceIndexer(ollamaClient, workspaceRoot);
-    semanticRetriever = new SemanticRetriever(ollamaClient, workspaceIndexer);
+    const workspaceIndexer = new WorkspaceIndexer(llmProvider, workspaceRoot);
+    semanticRetriever = new SemanticRetriever(llmProvider, workspaceIndexer);
 
     // Build index in background — does not block activation
     workspaceIndexer.buildIndex().catch(err => {
@@ -114,7 +115,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // --- Agent Runner ---
   agentRunner = new AgentRunner(
-    ollamaClient,
+    llmProvider,
     modelManager,
     modelRouter,
     toolExecutor,
@@ -125,6 +126,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Now wire the agent runner into the bridge (resolves circular dependency)
   bridge.setAgentRunner(agentRunner);
+
+  // --- Selection Change Listener ---
+  // Notify webview when user selects text so selection context shows immediately
+  const selectionListener = vscode.window.onDidChangeTextEditorSelection((event) => {
+    if (event.textEditor.document.uri.scheme === 'file') {
+      bridge.refreshContextSnapshot();
+    }
+  });
+  context.subscriptions.push(selectionListener);
+
+  // Also listen for active editor changes
+  const editorChangeListener = vscode.window.onDidChangeActiveTextEditor(() => {
+    bridge.refreshContextSnapshot();
+  });
+  context.subscriptions.push(editorChangeListener);
 
   // --- Diff Preview Provider ---
   const diffPreviewProvider = new DiffPreviewProvider();
@@ -203,7 +219,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.languages.registerInlineCompletionItemProvider(
       { scheme: 'file' },
-      new InlineCompletionProvider(ollamaClient, modelManager)
+      new InlineCompletionProvider(llmProvider, modelManager)
     )
   );
 

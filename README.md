@@ -2,278 +2,395 @@
 
 A VSCode extension that replicates GitHub Copilot Agent behavior using local LLMs via [Ollama](https://ollama.com). Fully private — no data leaves your machine.
 
+**Key Features:**
+- 🤖 **Agent Mode** — Autonomous coding assistant that reads files, edits code, runs commands
+- 💬 **Chat Mode** — Conversational Q&A about your codebase
+- ✨ **Inline Completions** — Ghost text suggestions as you type
+- 🔒 **Fully Local** — All inference runs on your machine via Ollama
+- 🔍 **Deep Code Analysis** — Traces through nested service/repository chains
+
+---
+
+## Table of Contents
+
+- [Requirements](#requirements)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+- [Features](#features)
+- [Configuration](#configuration)
+- [Keyboard Shortcuts](#keyboard-shortcuts)
+- [Troubleshooting](#troubleshooting)
+- [Security](#security)
+
 ---
 
 ## Requirements
 
-- [Node.js](https://nodejs.org) v18+
-- [Ollama](https://ollama.com) installed and running
-- VSCode 1.90+
+### 1. Ollama
+
+Install Ollama from [ollama.com](https://ollama.com) or via terminal:
+
+```bash
+# macOS/Linux
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Windows - Download from https://ollama.com/download
+```
+
+**Important:** Ollama must be running for Ciper Agent to work. It runs on `http://localhost:11434` by default.
+
+```bash
+# Start Ollama (usually runs automatically after install)
+ollama serve
+
+# Verify it's running
+curl http://localhost:11434/api/tags
+```
+
+### 2. Pull a Model
+
+```bash
+# Recommended for coding tasks
+ollama pull qwen2.5-coder:7b
+
+# For more complex tasks (needs more VRAM)
+ollama pull qwen2.5-coder:14b
+
+# Smaller models for inline completions only
+ollama pull qwen2.5-coder:1.5b
+```
+
+### 3. VSCode
+
+VSCode 1.90 or later. [Download here](https://code.visualstudio.com/)
+
+### 4. Node.js
+
+Node.js v18+ for building the extension. [Download here](https://nodejs.org/)
+
+---
+
+## Installation
+
+### Option 1: Development (Recommended for Testing)
+
+```bash
+# 1. Clone the repository
+git clone <repo-url>
+cd ciper-agent
+
+# 2. Install dependencies
+npm install
+
+# 3. Build the extension
+npm run build
+
+# 4. Open in VSCode
+code .
+
+# 5. Press F5 to launch Extension Development Host
+```
+
+This opens a new VSCode window with Ciper Agent loaded. Changes to source code will rebuild automatically in watch mode.
+
+### Option 2: Install from .vsix
+
+```bash
+# 1. Build the .vsix package
+npm run package
+
+# 2. Install it
+code --install-extension backend/ciper-agent-*.vsix
+
+# 3. Restart VSCode
+```
+
+Or in VSCode: `Extensions` panel → `⋯` menu → `Install from VSIX...`
 
 ---
 
 ## Quick Start
 
-### 1. Install Ollama and pull a model
-
-```bash
-# Install Ollama (Linux/macOS)
-curl -fsSL https://ollama.com/install.sh | sh
-
-# Pull a recommended model (good balance of speed and capability)
-ollama pull qwen2.5-coder:7b
-
-# Or for a more capable model (needs more VRAM)
-ollama pull qwen2.5-coder:14b
-```
-
-Verify Ollama is running:
-```bash
-curl http://localhost:11434/api/tags
-```
-
-### 2. Build the extension
-
-```bash
-# Clone and install dependencies
-cd ciper-agent
-npm install
-
-# Build all packages (shared types → webview → extension)
-npm run build
-```
-
-### 3. Run the extension in VSCode
-
-Press **F5** inside VSCode (with the `ciper-agent` folder open).
-
-This launches an **Extension Development Host** — a second VSCode window with Ciper Agent loaded.
-
----
-
-## Project Structure
-
-```
-ciper-agent/
-├── shared/          # Shared TypeScript types (message protocol)
-├── backend/         # The VSCode extension (Node.js, extension host)
-│   ├── src/         # Extension source code
-│   ├── dist/        # Compiled extension bundle (extension.js)
-│   └── media/       # Webview bundle (webview.js) — built by frontend
-└── frontend/        # React chat UI (builds into backend/media/)
-    └── src/
-```
-
-The `frontend/` and `backend/` are separate packages in an npm workspace monorepo. When you run `npm run build`, the output is:
-
-| File | What it is |
-|------|-----------|
-| `backend/dist/extension.js` | Extension host bundle — runs in VSCode's Node.js process |
-| `backend/media/webview.js` | React UI bundle — runs in VSCode's webview (Chromium) |
-
----
-
-## Using the Extension
-
 ### Opening the Chat Panel
-
-Three ways to open the Ciper panel:
 
 | Method | How |
 |--------|-----|
-| Activity Bar | Click the **◈** icon in the left sidebar |
-| Keyboard shortcut | `Ctrl+Alt+I` (Mac: `Cmd+Alt+I`) |
-| Command Palette | `Ctrl+Shift+P` → `Ciper: Open Ciper Chat` |
+| Click the **◈** icon | Left sidebar activity bar |
+| Keyboard | `Ctrl+Alt+I` (Mac: `Cmd+Alt+I`) |
+| Command Palette | `Ctrl+Shift+P` → `Ciper: Open Chat` |
 
-### Chat Mode vs Agent Mode
+### Your First Interaction
 
-The input bar has two modes, toggled with the **Chat / Agent** buttons:
-
-**Chat** — Conversational. Ask questions about your code, get explanations, request snippets. The model responds directly without executing any tools.
-
-**Agent** — Autonomous. Ciper plans, reads files, edits code, runs commands, and reflects until the task is complete. Use this for multi-step tasks like "refactor this module" or "add tests for X".
-
-### Right-Click Menu
-
-Select any code in the editor, right-click, and choose:
-
-- **Ask Ciper** — sends the selected code + your question to the agent
-- **Fix with Ciper** — asks the agent to fix the current line
-
-Keyboard shortcut for Ask Ciper with selection: `Ctrl+Shift+I`
-
-### Inline Completions (Ghost Text)
-
-As you type, Ciper suggests completions in grey ghost text — the same as Copilot. Press **Tab** to accept.
-
-Inline completions use a lightweight, debounced LLM call with a 2-second timeout so they don't slow down typing.
+1. Open the chat panel
+2. Select **Agent** mode (not Chat) for code tasks
+3. Type your request, e.g.:
+   - "Explain the main.go file"
+   - "Find all TODO comments"
+   - "Add error handling to the login function"
+4. Press **Enter** to send
 
 ---
 
-## Agent Mode: How It Works
+## Features
 
-When you send a message in Agent mode, Ciper runs an autonomous loop:
+### Agent Mode vs Chat Mode
+
+| Feature | Chat Mode | Agent Mode |
+|---------|-----------|------------|
+| File access | ❌ Read only | ✅ Full read/edit |
+| Tool execution | ❌ None | ✅ Read, write, search, run commands |
+| Use case | Q&A, explanations | Code changes, refactoring |
+| Best for | Understanding code | Implementing features |
+
+### Agent Mode Workflow
 
 ```
-1. PLAN    — model reasons about what to do next
-2. ACT     — calls a tool (read file, edit file, run command, etc.)
-3. OBSERVE — receives the tool result
-4. REFLECT — decides whether the task is done or needs another step
-5. Repeat  — up to 20 iterations (configurable)
+You: "Extract the raw SQL from GetUserById"
+
+Agent:
+1. 📖 Reads the main file → finds userService
+2. 📖 Reads userService → finds UserRepository
+3. 📖 Reads UserRepository → finds the SQL query
+4. ✅ Outputs: `SELECT id, name, email FROM users WHERE id = ?`
 ```
 
-You can see each step in the chat panel: tool calls are shown as `🔧 Calling: read_file` and results appear inline.
+The agent traces through nested dependencies automatically. No need to specify exact file paths.
 
-### Available Tools
+### Inline Completions (Ghost Text)
 
-| Tool | What it does |
-|------|-------------|
-| `read_file` | Reads a file from the workspace |
-| `write_file` | Creates or overwrites a file (with diff preview) |
-| `edit_file` | Applies a unified diff patch to a file (with diff preview) |
-| `list_files` | Lists directory contents |
-| `search_code` | Searches for a pattern across workspace files |
-| `run_command` | Runs a shell command in the workspace root |
+As you type, Ciper suggests code in faded grey text:
 
-### Approving File Changes
+```
+function calculateTotal(items) {
+  return items.reduce((sum, item) => {█
+```
 
-When the agent wants to write or edit a file, it **pauses and shows a diff preview** in the chat panel. You must click **✓ Apply Changes** before anything is written to disk.
+Press **Tab** to accept the suggestion. Completions are debounced (300ms) and timeout after 2 seconds.
 
-To disable approval (auto-apply all changes):
+### Diff Preview & Approval
+
+When the agent wants to modify files:
+
+1. A diff preview appears in the chat panel
+2. Review the changes
+3. Click **✓ Apply Changes** to confirm
+4. Or **✗ Discard** to cancel
+
+To auto-approve all changes (no preview):
 ```json
-// .vscode/settings.json
 {
   "ciperAgent.requireApprovalForEdits": false
 }
 ```
 
-### Stopping the Agent
+### Right-Click Context Menu
 
-- Click the **■ Stop** button in the status bar at the bottom of the chat panel
-- Or run `Ciper: Stop Agent` from the Command Palette
+Select code in the editor, right-click:
+
+- **Ask Ciper** — Send selection + your question to the agent
+- **Fix with Ciper** — Ask the agent to fix issues in selection
+
+Keyboard shortcut: `Ctrl+Shift+I`
 
 ---
 
 ## Configuration
 
-Open VSCode settings (`Ctrl+,`) and search for **Ciper** to see all options.
+Open VSCode settings (`Ctrl+,`) and search for **Ciper Agent**:
+
+### Essential Settings
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `ciperAgent.ollamaEndpoint` | `http://localhost:11434` | Ollama API URL |
-| `ciperAgent.model` | `qwen2.5-coder:7b` | Model for chat and agent mode |
-| `ciperAgent.completionModel` | *(uses main model)* | Separate model for inline completions |
-| `ciperAgent.contextTokenBudget` | `8192` | Max tokens used for workspace context |
-| `ciperAgent.maxAgentIterations` | `20` | Max agent loop iterations before stopping |
-| `ciperAgent.enableInlineCompletions` | `true` | Enable/disable ghost text completions |
-| `ciperAgent.completionDebounceMs` | `300` | Delay before triggering inline completion |
-| `ciperAgent.requireApprovalForEdits` | `true` | Show diff preview before applying file changes |
+| `ollamaEndpoint` | `http://localhost:11434` | Ollama API URL |
+| `model` | `qwen2.5-coder:7b` | Primary model for chat & agent |
+| `contextTokenBudget` | `8192` | Max tokens for workspace context |
 
-### Switching Models
+### Agent Settings
 
-The status bar at the bottom of the chat panel shows the active model. Click the model name to open a dropdown of all models available in your Ollama installation.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `maxAgentIterations` | `20` | Max iterations before auto-stop |
+| `requireApprovalForEdits` | `true` | Show diff preview before file changes |
 
-Or set it in settings:
+### Completion Settings
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enableInlineCompletions` | `true` | Enable ghost text suggestions |
+| `completionDebounceMs` | `300` | Delay before triggering completion |
+| `completionModel` | *(uses main model)* | Separate model for completions |
+
+### Recommended Model Combinations
+
+| Use Case | Chat/Agent Model | Completion Model |
+|----------|-----------------|-----------------|
+| Fast dev (8GB VRAM) | `qwen2.5-coder:7b` | `qwen2.5-coder:1.5b` |
+| Balanced (12GB VRAM) | `qwen2.5-coder:14b` | `qwen2.5-coder:3b` |
+| Max quality (24GB VRAM) | `qwen2.5-coder:32b` | `qwen2.5-coder:7b` |
+
+### Settings Examples
+
 ```json
 {
-  "ciperAgent.model": "llama3.2:3b",
-  "ciperAgent.completionModel": "qwen2.5-coder:1.5b"
+  // Point to remote Ollama if not on localhost
+  "ciperAgent.ollamaEndpoint": "http://192.168.1.100:11434",
+  
+  // Use a different default model
+  "ciperAgent.model": "codellama:13b",
+  
+  // Faster completions with smaller model
+  "ciperAgent.completionModel": "qwen2.5-coder:1.5b",
+  
+  // Allow auto-apply without preview
+  "ciperAgent.requireApprovalForEdits": false,
+  
+  // More context for complex projects
+  "ciperAgent.contextTokenBudget": 16384
 }
 ```
 
-### Recommended Models
-
-| Model | VRAM | Best for |
-|-------|------|---------|
-| `qwen2.5-coder:1.5b` | ~2GB | Inline completions (fast) |
-| `qwen2.5-coder:7b` | ~5GB | General coding (recommended default) |
-| `qwen2.5-coder:14b` | ~9GB | Complex agent tasks |
-| `llama3.2:3b` | ~3GB | Fast chat |
-| `mistral:7b` | ~5GB | General purpose |
-
 ---
 
-## Packaging as a .vsix
+## Keyboard Shortcuts
 
-To install the extension permanently (not just in dev mode):
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Alt+I` | Open Ciper chat panel |
+| `Ctrl+Shift+I` | Ask Ciper about selection |
+| `Tab` | Accept inline completion |
+| `Esc` | Cancel agent running |
 
-```bash
-# Install vsce if you don't have it
-npm install -g @vscode/vsce
-
-# From the repo root — builds everything then packages
-npm run package
-```
-
-This produces `backend/ciper-agent-0.1.0.vsix`. Install it:
-
-```bash
-code --install-extension backend/ciper-agent-0.1.0.vsix
-```
-
-Or in VSCode: `Extensions` panel → `...` menu → `Install from VSIX...`
-
----
-
-## Development
-
-### Watch Mode
-
-Run both the extension and webview in watch mode simultaneously:
-
-```bash
-npm run watch
-```
-
-Then press **F5** to launch the Extension Development Host. Changes to source files will recompile automatically — reload the host window (`Ctrl+R`) to pick them up.
-
-### Build a single package
-
-```bash
-npm run build -w shared    # Shared types only
-npm run build -w frontend  # React webview only (outputs to backend/media/)
-npm run build -w backend   # Extension host only
-```
-
-### Folder responsibilities
-
-| Folder | Language | Runs in | Has access to |
-|--------|----------|---------|---------------|
-| `backend/src/` | TypeScript | VSCode Extension Host (Node.js) | VSCode API, filesystem, child_process, Ollama HTTP |
-| `frontend/src/` | TypeScript + React | Webview (Chromium sandbox) | DOM, React — communicates with backend via `postMessage` only |
-| `shared/src/` | TypeScript | Compile-time only | Shared by both — defines the message protocol |
+All shortcuts can be customized in VSCode settings: `Preferences → Keyboard Shortcuts`
 
 ---
 
 ## Troubleshooting
 
-**Ciper panel is blank / not loading**
-- Make sure you ran `npm run build` before pressing F5
-- Check the Extension Development Host's developer console (`Help → Toggle Developer Tools`) for errors
+### "No models available"
 
-**"No models available" in the status bar**
-- Verify Ollama is running: `curl http://localhost:11434/api/tags`
-- Check the endpoint setting matches your Ollama install: `ciperAgent.ollamaEndpoint`
+1. Check Ollama is running:
+   ```bash
+   curl http://localhost:11434/api/tags
+   ```
 
-**Inline completions not appearing**
-- They are debounced by 300ms and have a 2-second timeout — pause briefly after typing
-- Check `ciperAgent.enableInlineCompletions` is `true`
-- For faster completions, set a small dedicated model: `"ciperAgent.completionModel": "qwen2.5-coder:1.5b"`
+2. Pull a model:
+   ```bash
+   ollama pull qwen2.5-coder:7b
+   ```
 
-**Agent loops forever or hits iteration limit**
-- Increase `ciperAgent.maxAgentIterations` (default 20)
-- Use a more capable model — smaller models struggle with strict JSON output format
-- Check the chat panel for parse error messages (the agent retries up to 3 times on bad JSON)
+3. Verify the endpoint setting matches your Ollama install
 
-**File edits fail to apply**
-- The agent uses unified diff format — some models produce malformed diffs
-- Try rephrasing: "rewrite the entire function X" (triggers `write_file`) rather than "add a line to X" (triggers `edit_file`)
+### "Agent says it can't read files"
+
+1. Make sure you have a workspace folder open (`File → Open Folder`)
+2. Check the file path in the chat — relative paths are resolved from workspace root
+3. For files outside workspace, use absolute paths
+
+### "Agent makes up code / doesn't read files"
+
+The agent should automatically read files before analyzing them. If it doesn't:
+
+1. Use **Agent mode** (not Chat mode)
+2. Be specific: "Read the userRepository.go file and extract the SQL query"
+3. The agent traces nested dependencies automatically
+
+### "File edits fail to apply"
+
+1. The agent uses unified diff format — some models produce imperfect diffs
+2. Try rephrasing: "rewrite the entire function X" instead of "add a line"
+3. Check the file hasn't been modified externally
+
+### "Inline completions not appearing"
+
+1. Completions are debounced — pause briefly after typing
+2. Check `ciperAgent.enableInlineCompletions` is `true`
+3. Try a faster completion model: `"ciperAgent.completionModel": "qwen2.5-coder:1.5b"`
+
+### "Agent loops forever"
+
+1. Increase iteration limit: `"ciperAgent.maxAgentIterations": 50`
+2. Use a more capable model
+3. Break complex tasks into smaller steps
+4. Check chat panel for parse error messages
+
+### "Extension not loading"
+
+1. Make sure you ran `npm run build` before pressing F5
+2. Check Extension Development Host console: `Help → Toggle Developer Tools`
+3. Try reloading: `Ctrl+Shift+P → Developer: Reload Window`
+
+### Performance Issues
+
+For slower models:
+- Reduce context budget: `"ciperAgent.contextTokenBudget": 4096`
+- Use dedicated fast model for completions
+- Close other applications using GPU
 
 ---
 
 ## Security
 
-- **File writes always require approval** (unless you disable `requireApprovalForEdits`)
-- **Dangerous shell commands are blocked**: `rm -rf`, `sudo`, `curl | bash`, `wget | sh`, `dd if=`, fork bombs, etc.
-- **Path traversal is prevented**: the agent cannot read or write files outside the open workspace folder
-- All inference is local — no API keys, no telemetry, no network calls except to `localhost:11434`
+### Built-in Protections
+
+| Protection | How it works |
+|------------|--------------|
+| **File writes require approval** | Default — user must explicitly approve each file change |
+| **Dangerous commands blocked** | `rm -rf`, `sudo`, `curl \| bash`, etc. are prevented |
+| **Path traversal prevention** | Cannot read/write files outside workspace folder |
+| **No network calls** | All inference runs locally via Ollama |
+
+### Command Blocklist
+
+The following patterns are blocked:
+- `rm -rf` (recursive delete)
+- `sudo` (privilege escalation)
+- `curl | bash` / `wget | sh` (pipe to shell)
+- `dd if=` (direct disk write)
+- Fork bombs (`:(){:|:&};:`)
+
+### Best Practices
+
+1. **Review diffs before approving** — Don't auto-approve blindly
+2. **Use Agent mode for changes** — Chat mode can't modify files
+3. **Start with read-only queries** — "Explain X" before "Fix X"
+4. **Keep Ollama updated** — `ollama update`
+
+---
+
+## Uninstalling
+
+```bash
+# Remove extension
+code --uninstall-extension ciper-agent
+
+# Or in VSCode: Extensions → Ciper Agent → Uninstall
+```
+
+---
+
+## License
+
+MIT
+
+---
+
+## Contributing
+
+See [docs/](./docs/) for architecture documentation.
+
+### Development Workflow
+
+```bash
+# Watch mode - auto-rebuild on changes
+npm run watch
+
+# Build production bundle
+npm run build
+
+# Run tests
+npm test
+
+# Package as .vsix
+npm run package
+```

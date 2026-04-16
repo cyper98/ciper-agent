@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ChatMessage as ChatMessageType } from '@ciper-agent/shared';
+import { ChatMessage as ChatMessageType, AgentState } from '@ciper-agent/shared';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { DiffViewer } from '../DiffViewer/DiffViewer';
 import { WorkerProgressGroup } from '../WorkerProgress/WorkerProgressGroup';
@@ -7,13 +7,22 @@ import { WorkerProgressGroup } from '../WorkerProgress/WorkerProgressGroup';
 interface ChatMessageProps {
   message: ChatMessageType;
   streamContent?: string;
+  agentState?: AgentState;
   onApproveDiff?: (diffId: string) => void;
   onRejectDiff?: (diffId: string) => void;
 }
 
+const STATE_WORKING: Partial<Record<AgentState, string>> = {
+  PLAN:    'Ciper is planning',
+  ACT:     'Ciper is working',
+  OBSERVE: 'Ciper is reading',
+  REFLECT: 'Ciper is thinking',
+};
+
 export function ChatMessage({
   message,
   streamContent,
+  agentState,
   onApproveDiff,
   onRejectDiff,
 }: ChatMessageProps): JSX.Element {
@@ -56,10 +65,16 @@ export function ChatMessage({
   }
 
   if (message.role === 'tool') {
-    return <ToolMessage message={message} />;
+    return (
+      <div className="msg msg--tool">
+        <ToolMessage message={message} />
+      </div>
+    );
   }
 
   const isUser = message.role === 'user';
+  const isWorking = agentState && agentState !== 'IDLE' && agentState !== 'DONE' && agentState !== 'ERROR';
+  const workingText = isWorking ? STATE_WORKING[agentState] : null;
 
   return (
     <div className={`msg msg--${message.role}`}>
@@ -69,13 +84,23 @@ export function ChatMessage({
       <div className="msg__body">
         <div className="msg__meta">
           <span className="msg__name">{isUser ? 'You' : 'Ciper'}</span>
-          {isStreaming && <span className="msg__typing">●●●</span>}
+          {isWorking && !isStreaming && (
+            <span className="msg__working">
+              {workingText}
+              <span className="msg__working-dots">
+                <span></span><span></span><span></span>
+              </span>
+            </span>
+          )}
+          {isStreaming && (
+            <span className="msg__typing">●●●</span>
+          )}
         </div>
         <div className="msg__content">
           {isUser ? (
             <p className="msg__user-text">{content}</p>
           ) : (
-            <MarkdownRenderer content={content || (isStreaming ? '…' : '')} />
+            <MarkdownRenderer content={content || (isStreaming || isWorking ? '' : '')} />
           )}
         </div>
         {!isUser && !isStreaming && content && (
@@ -91,23 +116,17 @@ export function ChatMessage({
 }
 
 function ToolMessage({ message }: { message: ChatMessageType }): JSX.Element {
-  const [expanded, setExpanded] = useState(false);
   const action = message.toolAction;
   const result = message.toolResult;
 
-  // Group calls and results by showing just the action summary
   if (action) {
     return (
-      <div className="tool-call">
-        <button className="tool-call__toggle" onClick={() => setExpanded(e => !e)}>
-          <span className="tool-call__icon">⚙</span>
-          <span className="tool-call__label">{formatToolLabel(action.type)}</span>
-          <span className="tool-call__path">{getToolPath(action)}</span>
-          <span className="tool-call__chevron">{expanded ? '▾' : '▸'}</span>
-        </button>
-        {expanded && (
-          <pre className="tool-call__detail">{JSON.stringify(action, null, 2)}</pre>
-        )}
+      <div className="tool-inline">
+        <span className="tool-inline__action">
+          {getToolIcon(action.type)}
+          <span className="tool-inline__label">{formatToolLabel(action.type)}</span>
+        </span>
+        <span className="tool-inline__detail">{getToolDetail(action)}</span>
       </div>
     );
   }
@@ -115,39 +134,60 @@ function ToolMessage({ message }: { message: ChatMessageType }): JSX.Element {
   if (result) {
     const isOk = result.ok;
     return (
-      <div className={`tool-result tool-result--${isOk ? 'ok' : 'err'}`}>
-        <span className="tool-result__icon">{isOk ? '✓' : '✗'}</span>
-        <span className="tool-result__text">
-          {isOk
-            ? (result.output?.slice(0, 120) ?? 'Done') + (result.output && result.output.length > 120 ? '…' : '')
-            : result.error}
+      <div className={`tool-inline tool-inline--${isOk ? 'ok' : 'err'}`}>
+        <span className="tool-inline__action">
+          <span className="tool-inline__icon">{isOk ? '✓' : '✗'}</span>
+          <span className="tool-inline__label">{isOk ? 'Done' : 'Error'}</span>
         </span>
+        {result.output && (
+          <span className="tool-inline__detail">{truncate(result.output, 80)}</span>
+        )}
       </div>
     );
   }
 
-  return (
-    <div className="tool-result tool-result--ok">
-      <span>{message.content}</span>
-    </div>
-  );
+  return <></>;
 }
 
 function formatToolLabel(type: string): string {
   const labels: Record<string, string> = {
-    read_file: 'Reading file',
-    write_file: 'Writing file',
-    edit_file: 'Editing file',
-    list_files: 'Listing files',
-    search_code: 'Searching code',
-    run_command: 'Running command',
+    read_file: 'Read',
+    write_file: 'Write',
+    edit_file: 'Edit',
+    list_files: 'List',
+    search_code: 'Search',
+    run_command: 'Run',
   };
   return labels[type] ?? type;
 }
 
-function getToolPath(action: { type: string; [key: string]: unknown }): string {
-  if ('path' in action) return String(action.path);
+function getToolIcon(type: string): string {
+  const icons: Record<string, string> = {
+    read_file: '📄',
+    write_file: '✏️',
+    edit_file: '🔧',
+    list_files: '📁',
+    search_code: '🔍',
+    run_command: '⚡',
+  };
+  return icons[type] ?? '⚙';
+}
+
+function getToolDetail(action: { type: string; [key: string]: unknown }): string {
+  if ('path' in action && action.path) {
+    const p = String(action.path);
+    const parts = p.split('/');
+    if (parts.length > 2) {
+      return `…/${parts.slice(-2).join('/')}`;
+    }
+    return p;
+  }
   if ('query' in action) return String(action.query);
-  if ('command' in action) return String(action.command).slice(0, 40);
+  if ('command' in action) return truncate(String(action.command), 50);
   return '';
+}
+
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  return text.slice(0, max) + '…';
 }

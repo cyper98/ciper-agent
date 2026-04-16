@@ -1,64 +1,65 @@
 .status-bar {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 0 12px;
+  gap: 10px;
+  padding: 0 14px;
   height: 26px;
-  border-top: 1px solid var(--vscode-panel-border, #454545);
+  border-top: 1px solid var(--border-subtle);
   font-size: 11px;
-  color: var(--vscode-descriptionForeground);
-  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  color: var(--text-muted);
+  background: var(--bg-secondary);
 }
+
+.status-bar__provider { display: flex; align-items: center; gap: 4px; }
+
+.status-bar__provider-select {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: var(--vscode-font-family);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.1s;
+}
+
+.status-bar__provider-select:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.status-bar__provider-select:disabled { opacity: 0.4; cursor: default; }
 
 .status-bar__model { display: flex; align-items: center; gap: 4px; }
 
 .status-bar__model-select {
   background: transparent;
   border: none;
-  color: var(--vscode-descriptionForeground);
+  color: var(--text-muted);
   font-size: 11px;
   font-family: var(--vscode-font-family);
   cursor: pointer;
-  max-width: 130px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding: 2px 4px;
+  border-radius: 4px;
+  transition: all 0.1s;
 }
-.status-bar__model-select:hover { color: var(--vscode-foreground); }
-.status-bar__model-select:disabled { opacity: 0.5; cursor: default; }
+
+.status-bar__model-select:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.status-bar__model-select:disabled { opacity: 0.4; cursor: default; }
 
 .status-bar__model-name {
-  max-width: 130px;
+  max-width: 140px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.75;
+  font-size: 11px;
 }
 
 .status-bar__ollama-warn {
-  color: var(--vscode-inputValidation-warningBorder, #cca700);
+  color: var(--warning);
   cursor: help;
+  font-size: 11px;
 }
-
-.status-bar__state {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--vscode-foreground);
-  opacity: 0.8;
-}
-
-.status-bar__spinner {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  border: 1.5px solid currentColor;
-  border-top-color: transparent;
-  border-radius: 50%;
-  animation: spin 0.7s linear infinite;
-  flex-shrink: 0;
-}
-
-@keyframes spin { to { transform: rotate(360deg); } }
 
 .status-bar__right {
   margin-left: auto;
@@ -67,19 +68,11 @@
   gap: 8px;
 }
 
-.status-bar__tokens { opacity: 0.5; font-variant-numeric: tabular-nums; }
-
-.status-bar__cancel {
-  background: transparent;
-  border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
-  color: var(--vscode-inputValidation-errorForeground, #f48771);
-  padding: 1px 8px;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 11px;
-  font-family: var(--vscode-font-family);
-  transition: background 0.1s;
-}
-.status-bar__cancel:hover {
-  background: var(--vscode-inputValidation-errorBackground, rgba(190,17,0,0.15));
+.status-bar__tokens {
+  opacity: 0.5;
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  padding: 2px 6px;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
 }

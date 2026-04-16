@@ -36,6 +36,7 @@ export function InputBar({
   const [selectedSlash, setSelectedSlash] = useState(0);
   const [attachedFiles, setAttachedFiles] = useState<string[]>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
 
@@ -48,7 +49,6 @@ export function InputBar({
     }
   }, [initialValue]);
 
-  // Close picker when clicking outside
   useEffect(() => {
     if (!showFilePicker) return;
     const handler = (e: MouseEvent) => {
@@ -88,13 +88,16 @@ export function InputBar({
 
   const handleSend = () => {
     const trimmed = input.trim();
-    if (!trimmed || disabled) return;
+    if (!trimmed || disabled || isSending) return;
+    setIsSending(true);
     const resolved = resolveSlashCommand(trimmed);
-    onSend(resolved.text, resolved.mode ?? mode, attachedFiles.length > 0 ? attachedFiles : undefined);
-    setInput('');
+    setInput(''); // Clear input immediately before sending
     setAttachedFiles([]);
     setSlashMatches([]);
     if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    onSend(resolved.text, resolved.mode ?? mode, attachedFiles.length > 0 ? attachedFiles : undefined);
+    // Reset sending flag after a short delay to prevent race conditions
+    setTimeout(() => setIsSending(false), 500);
   };
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -142,7 +145,6 @@ export function InputBar({
 
   return (
     <div className="input-bar">
-      {/* Slash command popup */}
       {slashMatches.length > 0 && (
         <div className="input-bar__slash-menu">
           {slashMatches.map((c, i) => (
@@ -158,7 +160,6 @@ export function InputBar({
         </div>
       )}
 
-      {/* File picker popup */}
       {showFilePicker && (
         <div className="input-bar__file-picker" ref={pickerRef}>
           <div className="input-bar__file-picker-header">
@@ -190,17 +191,18 @@ export function InputBar({
         </div>
       )}
 
-      {/* Context chips row */}
       {hasContext && (
         <div className="input-bar__context-row">
           {hasSelection && (
             <span className="input-bar__chip input-bar__chip--selection" title="Selected text will be included as context">
-              ✂ Selection
+              <span className="input-bar__chip-icon">✂</span>
+              Selection
             </span>
           )}
           {attachedFiles.map(f => (
             <span key={f} className="input-bar__chip" title={f}>
-              📄 {f.split('/').pop()}
+              <span className="input-bar__chip-icon">📄</span>
+              {f.split('/').pop()}
               <button
                 className="input-bar__chip-remove"
                 onMouseDown={e => { e.preventDefault(); removeFile(f); }}
@@ -212,23 +214,41 @@ export function InputBar({
       )}
 
       <div className="input-bar__mode-row">
-        <button
-          className={`input-bar__mode-btn ${mode === 'chat' ? 'input-bar__mode-btn--active' : ''}`}
-          onClick={() => setMode('chat')}
-          title="Chat mode"
-        >Chat</button>
-        <button
-          className={`input-bar__mode-btn ${mode === 'agent' ? 'input-bar__mode-btn--active' : ''}`}
-          onClick={() => setMode('agent')}
-          title="Agent mode — autonomous multi-step task execution"
-        >⚙ Agent</button>
+        <div className="input-bar__mode-group">
+          <button
+            className={`input-bar__mode-btn ${mode === 'chat' ? 'input-bar__mode-btn--active' : ''}`}
+            onClick={() => setMode('chat')}
+            title="Chat mode"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+            </svg>
+            Chat
+          </button>
+          <button
+            className={`input-bar__mode-btn ${mode === 'agent' ? 'input-bar__mode-btn--active' : ''}`}
+            onClick={() => setMode('agent')}
+            title="Agent mode — autonomous multi-step task execution"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83M16.95 16.95l2.83 2.83M1 12h4M19 12h4M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>
+            </svg>
+            Agent
+          </button>
+        </div>
         <button
           className={`input-bar__attach-btn ${showFilePicker ? 'input-bar__attach-btn--active' : ''}`}
           onClick={toggleFilePicker}
-          title="Attach file to context (@)"
+          title="Attach file to context"
           disabled={disabled}
-        >@ file</button>
-        <span className="input-bar__hint">/ for commands · Enter to send · Shift+Enter for newline</span>
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+          Attach
+        </button>
+        <span className="input-bar__hint">/ for commands · Enter to send</span>
       </div>
 
       <div className="input-bar__input-row">
@@ -249,7 +269,9 @@ export function InputBar({
             title="Stop agent (Escape)"
             aria-label="Stop"
           >
-            <span className="input-bar__stop-icon">■</span>
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
+              <rect x="6" y="6" width="12" height="12" rx="2"/>
+            </svg>
           </button>
         ) : (
           <button
@@ -259,8 +281,9 @@ export function InputBar({
             title="Send (Enter)"
             aria-label="Send"
           >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M1 8l14-7-5 7 5 7z"/>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
+              <path d="M22 2L11 13" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M22 2L15 22L11 13L2 9L22 2Z" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
             </svg>
           </button>
         )}
@@ -271,7 +294,6 @@ export function InputBar({
 
 function resolveSlashCommand(text: string): { text: string; mode?: 'chat' | 'agent' } {
   if (text.startsWith('/explain ') || text === '/explain') {
-    // Agent mode so the model can read imported service files via tools
     return { text: `Explain the active file or selection in detail: ${text.slice(8).trim()}`.trimEnd(), mode: 'agent' };
   }
   if (text.startsWith('/fix ') || text === '/fix') {
@@ -281,7 +303,6 @@ function resolveSlashCommand(text: string): { text: string; mode?: 'chat' | 'age
     return { text: `Write comprehensive tests for the active file${text.slice(6) ? ': ' + text.slice(6).trim() : ''}`, mode: 'agent' };
   }
   if (text.startsWith('/review')) {
-    // Agent mode so the model can trace through service implementations
     return { text: `Review the active file for bugs, code quality, and improvements${text.slice(7) ? ': ' + text.slice(7).trim() : ''}`, mode: 'agent' };
   }
   if (text.startsWith('/docs')) {

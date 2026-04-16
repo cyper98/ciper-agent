@@ -1,33 +1,60 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { DiffEngine } from './DiffEngine';
 
 export class DiffApplier {
-  constructor(private diffEngine: DiffEngine) {}
+  constructor(private diffEngine: DiffEngine, private workspaceRoot?: string) {}
 
   /**
    * Apply a unified diff to a file using VSCode WorkspaceEdit.
    *
-   * We open the document first so both the patch application and the
-   * WorkspaceEdit operate on the exact same in-memory buffer that the
-   * model read via ReadFileTool — preventing mismatches caused by
-   * unsaved editor changes vs on-disk content.
+   * Handles both absolute and relative paths. If relative, resolves against workspace root.
    */
-  async apply(absolutePath: string, patchString: string): Promise<void> {
-    const uri = vscode.Uri.file(absolutePath);
+  async apply(filePath: string, patchString: string): Promise<void> {
+    // Resolve to absolute path
+    let absolutePath = filePath;
+    
+    // If not absolute, try to resolve against workspace root
+    if (!path.isAbsolute(absolutePath)) {
+      const wsRoot = this.workspaceRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (wsRoot) {
+        absolutePath = path.resolve(wsRoot, absolutePath);
+      }
+    }
 
-    // Open (or reuse) the in-memory document — same source ReadFileTool uses
+    // Normalize path separators for the current platform
+    absolutePath = path.normalize(absolutePath);
+
+    let uri = vscode.Uri.file(absolutePath);
+    
+    // Check if file exists
     let doc: vscode.TextDocument;
     let originalContent: string;
+    
     try {
-      doc = await vscode.workspace.openTextDocument(uri);
-      originalContent = doc.getText();
+      // First try to read via fs to check if file exists
+      const stat = await vscode.workspace.fs.stat(uri);
+      if (stat.type === vscode.FileType.File) {
+        doc = await vscode.workspace.openTextDocument(uri);
+        originalContent = doc.getText();
+      } else {
+        throw new Error('Path is not a file');
+      }
     } catch {
+      // File doesn't exist - create empty content for new file
       originalContent = '';
-      // If the file doesn't exist yet, create it empty; openTextDocument will
-      // succeed after WorkspaceEdit creates it below.
-      doc = await vscode.workspace.openTextDocument(
-        uri.with({ scheme: 'untitled' })
-      );
+      try {
+        // Try to open as untitled for new file creation
+        doc = await vscode.workspace.openTextDocument(
+          uri.with({ scheme: 'untitled' })
+        );
+      } catch {
+        // If that fails, create with a buffer
+        doc = await vscode.workspace.openTextDocument({
+          content: '',
+          language: this.detectLanguage(absolutePath),
+        });
+      }
     }
 
     // Try applying the patch as-is first
@@ -40,26 +67,76 @@ export class DiffApplier {
     }
 
     if (newContent === false) {
+      // Final attempt: try creating new file from scratch
+      if (!originalContent) {
+        newContent = this.extractNewFileContent(patchString);
+      }
+    }
+
+    if (newContent === false) {
       throw new Error(
-        `Failed to apply diff to ${absolutePath}. ` +
-          `The diff may not match the current file content.`
+        `Failed to apply diff to ${filePath}.\n` +
+        `The diff may not match the current file content.\n` +
+        `Path: ${absolutePath}\n` +
+        `Current content length: ${originalContent.length} chars`
       );
     }
 
     // Apply via WorkspaceEdit for proper undo support
     const edit = new vscode.WorkspaceEdit();
+    
+    // Re-open the document to ensure we have latest content
+    const targetDoc = await vscode.workspace.openTextDocument(uri);
     const fullRange = new vscode.Range(
-      doc.positionAt(0),
-      doc.positionAt(doc.getText().length)
+      targetDoc.positionAt(0),
+      targetDoc.positionAt(targetDoc.getText().length)
     );
     edit.replace(uri, fullRange, newContent);
 
     const success = await vscode.workspace.applyEdit(edit);
     if (!success) {
-      throw new Error(`VSCode WorkspaceEdit failed to apply changes to ${absolutePath}`);
+      throw new Error(`VSCode WorkspaceEdit failed to apply changes to ${filePath}`);
     }
 
-    await doc.save();
+    await targetDoc.save();
+  }
+
+  private detectLanguage(filePath: string): string {
+    const ext = path.extname(filePath).toLowerCase().slice(1);
+    const langMap: Record<string, string> = {
+      ts: 'typescript', tsx: 'typescript', js: 'javascript',
+      jsx: 'javascript', py: 'python', rs: 'rust', go: 'go',
+      java: 'java', cs: 'csharp', cpp: 'cpp', c: 'c',
+      json: 'json', md: 'markdown', css: 'css', html: 'html',
+    };
+    return langMap[ext] ?? 'plaintext';
+  }
+
+  private extractNewFileContent(patchString: string): string | false {
+    // Extract content from a new file diff (no --- line)
+    const lines = patchString.split('\n');
+    const contentLines: string[] = [];
+    let inContent = false;
+
+    for (const line of lines) {
+      // Skip diff headers
+      if (line.startsWith('---') || line.startsWith('+++')) continue;
+      if (line.startsWith('@@')) {
+        inContent = true;
+        continue;
+      }
+      if (line.startsWith('diff ') || line.startsWith('index ')) continue;
+      
+      if (inContent || (!line.startsWith('-') && !line.startsWith('\\'))) {
+        if (line.startsWith('+')) {
+          contentLines.push(line.slice(1));
+        } else if (!line.startsWith('-')) {
+          contentLines.push(line);
+        }
+      }
+    }
+
+    return contentLines.length > 0 ? contentLines.join('\n') : false;
   }
 
   /**

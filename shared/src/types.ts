@@ -9,6 +9,28 @@
 export type AgentState = 'IDLE' | 'PLAN' | 'ACT' | 'OBSERVE' | 'REFLECT' | 'DONE' | 'ERROR';
 
 // ---------------------------------------------------------------------------
+// Conversation Management
+// ---------------------------------------------------------------------------
+export interface Conversation {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  tokenCount: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ConversationSummary {
+  id: string;
+  title: string;
+  tokenCount: number;
+  messageCount: number;
+  createdAt: number;
+  updatedAt: number;
+  preview: string;
+}
+
+// ---------------------------------------------------------------------------
 // Tool Actions (what the model can request)
 // ---------------------------------------------------------------------------
 export type ToolAction =
@@ -65,10 +87,15 @@ export type FrontendMessage =
   | { kind: 'APPROVE_DIFF';   diffId: string }
   | { kind: 'REJECT_DIFF';    diffId: string }
   | { kind: 'SELECT_MODEL';   model: string }
+  | { kind: 'SELECT_PROVIDER'; provider: string }
   | { kind: 'REQUEST_MODELS' }
   | { kind: 'REQUEST_CONTEXT_SNAPSHOT' }
   | { kind: 'SAVE_HISTORY';   messages: ChatMessage[] }
   | { kind: 'CLEAR_HISTORY' }
+  | { kind: 'NEW_CONVERSATION' }
+  | { kind: 'LOAD_CONVERSATION'; conversationId: string }
+  | { kind: 'DELETE_CONVERSATION'; conversationId: string }
+  | { kind: 'RENAME_CONVERSATION'; conversationId: string; title: string }
   | { kind: 'READY' };
 
 // ---------------------------------------------------------------------------
@@ -82,10 +109,12 @@ export type BackendMessage =
   | { kind: 'TOOL_CALL';          action: ToolAction; messageId: string }
   | { kind: 'TOOL_RESULT';        result: ToolResult; messageId: string }
   | { kind: 'DIFF_PREVIEW';       diffId: string; path: string; diff: string; messageId: string }
-  | { kind: 'MODELS_LIST';        models: string[]; selected: string }
+  | { kind: 'MODELS_LIST';        models: string[]; selected: string; provider?: string }
   | { kind: 'CONTEXT_INFO';       tokenCount: number; budget: number }
   | { kind: 'CONTEXT_SNAPSHOT';   openFiles: string[]; hasSelection: boolean }
   | { kind: 'RESTORE_HISTORY';    messages: ChatMessage[] }
+  | { kind: 'RESTORE_CONVERSATIONS'; conversations: ConversationSummary[] }
+  | { kind: 'CONVERSATION_LOADED'; conversation: Conversation }
   | { kind: 'INJECT_USER_MESSAGE'; content: string; mode: 'chat' | 'agent' }
   | { kind: 'WORKER_SPAWNED';     taskId: string; description: string; messageId: string }
   | { kind: 'WORKER_DONE';        taskId: string; summary: string; ok: boolean; messageId: string }

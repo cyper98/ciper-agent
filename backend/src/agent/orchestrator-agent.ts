@@ -1,12 +1,13 @@
-import { OllamaClient, OllamaChatMessage, LlmCallOptions } from '../llm/OllamaClient';
+import { LlmProvider, ChatMessage, LlmCallOptions } from '../llm/providers/LlmProvider';
 import { ToolExecutor } from '../tools/ToolExecutor';
+import { ParallelToolExecutor, BatchToolCall } from '../tools/parallel-tool-executor';
 import { ModelRouter } from '../llm/model-router';
 import { ResponseParser } from './ResponseParser';
 import { RetryStrategy } from './RetryStrategy';
 import { ThoughtExtractor } from './ThoughtExtractor';
 import { WorkerAgent } from './worker-agent';
 import { MessageBridge } from '../webview/MessageBridge';
-import { ContextPayload, SubTask, WorkerResult, ToolAction } from '@ciper-agent/shared';
+import { ContextPayload, SubTask, WorkerResult, ToolAction, AgentActionPayload } from '@ciper-agent/shared';
 import { buildOrchestratorSystemPrompt } from '../prompts/templates/orchestrator';
 
 const ORCHESTRATOR_LLM_OPTS: LlmCallOptions = {
@@ -52,15 +53,20 @@ function buildWorkerContextSnippet(ctx: ContextPayload): string {
 export class OrchestratorAgent {
   private parser = new ResponseParser();
   private retryStrategy = new RetryStrategy(this.parser);
+  private parallelExecutor: ParallelToolExecutor;
+  private fileEditsCount = 0;
+  private editedFiles: string[] = [];
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private modelRouter: ModelRouter,
     private toolExecutor: ToolExecutor,
     private bridge: MessageBridge,
     private signal: AbortSignal,
     private maxIterations: number
-  ) {}
+  ) {
+    this.parallelExecutor = new ParallelToolExecutor(toolExecutor);
+  }
 
   /**
    * Run the orchestrator loop.
@@ -70,9 +76,9 @@ export class OrchestratorAgent {
   async run(
     userMessage: string,
     context: ContextPayload,
-    priorHistory: OllamaChatMessage[],
+    priorHistory: ChatMessage[],
     ragContext = ''
-  ): Promise<OllamaChatMessage[]> {
+  ): Promise<ChatMessage[]> {
     const baseContext =
       `Workspace root: ${context.workspaceRoot}` +
       (context.activeFile ? `\nActive file: ${context.activeFile.path}` : '') +
@@ -83,14 +89,14 @@ export class OrchestratorAgent {
 
     const contextSection = buildOrchestratorSystemPrompt(baseContext);
 
-    const history: OllamaChatMessage[] = [
+    const history: ChatMessage[] = [
       { role: 'system', content: contextSection },
       ...priorHistory,
       { role: 'user', content: userMessage },
     ];
 
     // Turns added this run — returned for AgentRunner to commit to conversation history
-    const newTurns: OllamaChatMessage[] = [{ role: 'user', content: userMessage }];
+    const newTurns: ChatMessage[] = [{ role: 'user', content: userMessage }];
     const workerContextSnippet = buildWorkerContextSnippet(context);
 
     for (let iter = 0; iter < this.maxIterations; iter++) {
@@ -101,7 +107,7 @@ export class OrchestratorAgent {
       let rawResponse = '';
       let thoughtMsgId: string | null = null;
 
-      for await (const token of this.ollamaClient.streamChat(
+      for await (const token of this.llmProvider.streamChat(
         this.modelRouter.orchestratorModel(),
         history,
         this.signal,
@@ -115,42 +121,52 @@ export class OrchestratorAgent {
           this.bridge.send({ kind: 'STREAM_TOKEN', token: chars, messageId: thoughtMsgId });
         }
       }
-      if (thoughtMsgId) this.bridge.send({ kind: 'STREAM_DONE', messageId: thoughtMsgId });
+      // Don't send STREAM_DONE here - we need to send remaining tokens first!
 
       const { parsed, finalResponse } = await this.retryStrategy.parseWithRetry(
         rawResponse,
         history,
         (attempt, err) => {
-          const id = generateId();
-          this.bridge.send({ kind: 'STREAM_TOKEN', token: `⚠️ Parse error (attempt ${attempt}): ${err}\n`, messageId: id });
-          this.bridge.send({ kind: 'STREAM_DONE', messageId: id });
+          // Log parse error but don't create a new UI message - it will confuse the stream
+          console.warn(`Parse error attempt ${attempt}: ${err}`);
         },
         async (msgs) => {
           let r = '';
-          for await (const t of this.ollamaClient.streamChat(
+          for await (const t of this.llmProvider.streamChat(
             this.modelRouter.orchestratorModel(), msgs, this.signal, 'json', ORCHESTRATOR_LLM_OPTS
           )) r += t;
           return r;
         }
       );
 
-      // Emit thought if streaming didn't deliver it
-      if (!thoughtMsgId) {
-        const id = generateId();
-        this.bridge.send({ kind: 'STREAM_TOKEN', token: parsed.thought, messageId: id });
-        this.bridge.send({ kind: 'STREAM_DONE', messageId: id });
-      }
+      // Determine the single messageId for this response
+      // Use thoughtMsgId if thought was streamed, otherwise create one
+      const responseMsgId = thoughtMsgId ?? generateId();
 
-      const orchestratorTurn: OllamaChatMessage = { role: 'assistant', content: finalResponse };
+      // NEVER send parsed.thought - it was already streamed via ThoughtExtractor
+      // Sending it again creates duplicate messages
+
+      const orchestratorTurn: ChatMessage = { role: 'assistant', content: finalResponse };
 
       // ── done ─────────────────────────────────────────────────────────────
       if (parsed.action.type === 'done') {
-        const doneId = generateId();
-        this.bridge.send({ kind: 'STREAM_TOKEN', token: `✅ ${parsed.action.message}`, messageId: doneId });
-        this.bridge.send({ kind: 'STREAM_DONE', messageId: doneId });
+        // Add build suggestion if files were edited
+        let buildSuggestion = '';
+        if (this.fileEditsCount > 0) {
+          buildSuggestion = this.generateBuildSuggestion();
+        }
+        
+        // Send done message to the SAME responseMsgId (no STREAM_DONE yet)
+        this.bridge.send({ kind: 'STREAM_TOKEN', token: `\n✅ ${parsed.action.message}${buildSuggestion}`, messageId: responseMsgId });
+        this.bridge.send({ kind: 'STREAM_DONE', messageId: responseMsgId });
         newTurns.push(orchestratorTurn);
         return newTurns;
       }
+
+      // ── tool call or sub_tasks ──────────────────────────────────────────
+      // Send STREAM_DONE for the thought/response part
+      this.bridge.send({ kind: 'STREAM_DONE', messageId: responseMsgId });
+      newTurns.push(orchestratorTurn);
 
       // ── sub_tasks — spawn workers in parallel ────────────────────────────
       if (parsed.action.type === 'sub_tasks') {
@@ -177,7 +193,7 @@ export class OrchestratorAgent {
         const settled = await Promise.allSettled(
           tasks.map(task => {
             const worker = new WorkerAgent(
-              this.ollamaClient,
+              this.llmProvider,
               this.modelRouter.workerModel(),
               this.modelRouter.workerNumCtx(),
               this.toolExecutor,
@@ -214,7 +230,7 @@ export class OrchestratorAgent {
         const truncationNote = dropped > 0
           ? `\nNote: ${dropped} additional task(s) were not run (maxWorkerAgents limit). Consider re-planning them.`
           : '';
-        const synthTurn: OllamaChatMessage = {
+        const synthTurn: ChatMessage = {
           role: 'user',
           content: formatWorkerResults(workerResults) + truncationNote,
         };
@@ -223,26 +239,175 @@ export class OrchestratorAgent {
         continue;
       }
 
-      // ── direct tool call ─────────────────────────────────────────────────
-      const toolAction = parsed.action as ToolAction;
-      const toolMsgId = generateId();
-      this.bridge.send({ kind: 'TOOL_CALL', action: toolAction, messageId: toolMsgId });
-      const result = await this.toolExecutor.execute(toolAction);
-      this.bridge.send({ kind: 'TOOL_RESULT', result, messageId: toolMsgId });
-
-      const toolResultTurn: OllamaChatMessage = {
-        role: 'user',
-        content:
-          `=== TOOL RESULT (${toolAction.type}) ===\n` +
-          `Status: ${result.ok ? 'SUCCESS' : 'ERROR'}\n` +
-          (result.ok ? result.output ?? '(no output)' : result.error ?? 'unknown error') +
-          `\n=== END TOOL RESULT ===\n\nNow output your next {"thought":"...","action":{...}} JSON:`,
-      };
-      history.push(orchestratorTurn, toolResultTurn);
-      newTurns.push(orchestratorTurn, toolResultTurn);
+      // ── direct tool call (supports batch) ─────────────────────────────────
+      const actions = this.extractToolActions(parsed.action);
+      await this.executeToolBatch(actions, history, orchestratorTurn, newTurns);
     }
 
     // Hit max iterations — commit what we have
     return newTurns;
+  }
+
+  /**
+   * Extract single or multiple tool actions from parsed response.
+   */
+  private extractToolActions(action: AgentActionPayload): ToolAction[] {
+    if (action.type === 'done') return [];
+    return [action as ToolAction];
+  }
+
+  /**
+   * Execute tool(s) and update history with results.
+   * Read-only tools are batched and executed in parallel.
+   */
+  private async executeToolBatch(
+    actions: ToolAction[],
+    history: ChatMessage[],
+    orchestratorTurn: ChatMessage,
+    newTurns: ChatMessage[]
+  ): Promise<void> {
+    if (actions.length === 0) return;
+
+    if (actions.length === 1) {
+      const toolAction = actions[0];
+      const toolMsgId = generateId();
+      this.bridge.send({ kind: 'TOOL_CALL', action: toolAction, messageId: toolMsgId });
+      const result = await this.toolExecutor.execute(toolAction);
+      this.bridge.send({ kind: 'TOOL_RESULT', result, messageId: toolMsgId });
+      
+      // Track file edits
+      if ((toolAction.type === 'write_file' || toolAction.type === 'edit_file') && result.ok) {
+        this.fileEditsCount++;
+        this.editedFiles.push(toolAction.path);
+      }
+      
+      this.addToolResultToHistory(history, newTurns, orchestratorTurn, toolAction, result);
+      return;
+    }
+
+    const readOnlyActions = actions.filter(a => 
+      a.type === 'read_file' || a.type === 'list_files' || a.type === 'search_code'
+    );
+    const writeActions = actions.filter(a => 
+      a.type === 'write_file' || a.type === 'edit_file' || a.type === 'run_command'
+    );
+
+    if (readOnlyActions.length > 1) {
+      const batchCalls: BatchToolCall[] = readOnlyActions.map((action, idx) => ({
+        id: generateId(),
+        action,
+      }));
+
+      const toolMsgId = generateId();
+      this.bridge.send({ 
+        kind: 'TOOL_CALL', 
+        action: { type: 'batch', count: batchCalls.length } as unknown as ToolAction, 
+        messageId: toolMsgId 
+      });
+
+      const results = await this.parallelExecutor.executeBatch(batchCalls);
+
+      const toolResultsContent = results.map((r, idx) => {
+        const action = readOnlyActions[idx];
+        const result = r.result;
+        this.bridge.send({ kind: 'TOOL_RESULT', result, messageId: r.id });
+        const targetPath = this.getActionTarget(action);
+        return `=== TOOL RESULT (${action.type}${targetPath ? ':' + targetPath : ''}) ===\n` +
+               `Status: ${result.ok ? 'SUCCESS' : 'ERROR'}\n` +
+               (result.ok ? result.output ?? '(no output)' : result.error ?? 'unknown error');
+      }).join('\n\n');
+
+      const toolResultTurn: ChatMessage = {
+        role: 'user',
+        content: `${toolResultsContent}\n\nNow output your next {"thought":"...","action":{...}} JSON:`,
+      };
+      history.push(orchestratorTurn, toolResultTurn);
+      newTurns.push(orchestratorTurn, toolResultTurn);
+
+      for (const action of writeActions) {
+        const toolMsgId = generateId();
+        this.bridge.send({ kind: 'TOOL_CALL', action, messageId: toolMsgId });
+        const result = await this.toolExecutor.execute(action);
+        this.bridge.send({ kind: 'TOOL_RESULT', result, messageId: toolMsgId });
+        this.addToolResultToHistory(history, newTurns, orchestratorTurn, action, result);
+      }
+    } else {
+      for (const action of actions) {
+        const toolMsgId = generateId();
+        this.bridge.send({ kind: 'TOOL_CALL', action, messageId: toolMsgId });
+        const result = await this.toolExecutor.execute(action);
+        this.bridge.send({ kind: 'TOOL_RESULT', result, messageId: toolMsgId });
+        this.addToolResultToHistory(history, newTurns, orchestratorTurn, action, result);
+      }
+    }
+  }
+
+  private getActionTarget(action: ToolAction): string {
+    switch (action.type) {
+      case 'read_file':
+      case 'write_file':
+      case 'edit_file':
+      case 'list_files':
+        return action.path;
+      case 'search_code':
+        return action.query.slice(0, 50);
+      case 'run_command':
+        return action.command.slice(0, 30);
+      default:
+        return '';
+    }
+  }
+
+  private addToolResultToHistory(
+    history: ChatMessage[],
+    newTurns: ChatMessage[],
+    orchestratorTurn: ChatMessage,
+    toolAction: ToolAction,
+    result: { ok: boolean; output?: string; error?: string }
+  ): void {
+    const toolResultTurn: ChatMessage = {
+      role: 'user',
+      content:
+        `=== TOOL RESULT (${toolAction.type}) ===\n` +
+        `Status: ${result.ok ? 'SUCCESS' : 'ERROR'}\n` +
+        (result.ok ? result.output ?? '(no output)' : result.error ?? 'unknown error') +
+        `\n=== END TOOL RESULT ===\n\nNow output your next {"thought":"...","action":{...}} JSON:`,
+    };
+    history.push(orchestratorTurn, toolResultTurn);
+    newTurns.push(orchestratorTurn, toolResultTurn);
+  }
+
+  /**
+   * Generate build/test suggestions based on project structure.
+   */
+  private generateBuildSuggestion(): string {
+    const uniqueFiles = [...new Set(this.editedFiles)];
+    const fileTypes = uniqueFiles.map(f => f.split('.').pop()?.toLowerCase() ?? '');
+    
+    const hasTS = fileTypes.includes('ts') || fileTypes.includes('tsx');
+    const hasJS = fileTypes.includes('js') || fileTypes.includes('jsx');
+    const hasPython = fileTypes.includes('py');
+    const hasRust = fileTypes.includes('rs');
+    
+    const suggestions: string[] = [];
+    
+    if (hasTS || hasJS) {
+      suggestions.push('npm run build', 'npm run test', 'npm run lint');
+    }
+    if (hasPython) {
+      suggestions.push('python -m pytest', 'python -m py_compile');
+    }
+    if (hasRust) {
+      suggestions.push('cargo build', 'cargo test');
+    }
+    
+    if (suggestions.length === 0) {
+      return '';
+    }
+    
+    const uniqueSuggestions = [...new Set(suggestions)].slice(0, 3);
+    const commands = uniqueSuggestions.map(cmd => `"${cmd}"`).join(' or ');
+    
+    return `\n\n💡 Tip: You may want to verify the changes by running: ${commands}`;
   }
 }

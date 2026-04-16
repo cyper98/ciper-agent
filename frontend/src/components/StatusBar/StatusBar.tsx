@@ -6,34 +6,41 @@ interface StatusBarProps {
   agentState: AgentState;
   selectedModel: string;
   models: string[];
+  provider: string;
   contextInfo: { tokenCount: number; budget: number } | null;
   onCancel: () => void;
   onSelectModel: (model: string) => void;
+  onSelectProvider: (provider: string) => void;
 }
-
-const STATE_LABELS: Partial<Record<AgentState, string>> = {
-  PLAN:    'Planning…',
-  ACT:     'Working…',
-  OBSERVE: 'Reading…',
-  REFLECT: 'Thinking…',
-  DONE:    'Done',
-  ERROR:   'Error',
-};
 
 export function StatusBar({
   agentState,
   selectedModel,
   models,
+  provider,
   contextInfo,
-  onCancel,
   onSelectModel,
+  onSelectProvider,
 }: StatusBarProps): JSX.Element {
   const isRunning = agentState !== 'IDLE' && agentState !== 'DONE' && agentState !== 'ERROR';
-  const stateLabel = STATE_LABELS[agentState];
-  const shortModel = selectedModel.split(':')[0] || selectedModel;
 
   return (
     <div className="status-bar">
+      {/* Provider selector */}
+      <div className="status-bar__provider">
+        <select
+          className="status-bar__provider-select"
+          value={provider}
+          onChange={e => onSelectProvider(e.target.value)}
+          disabled={isRunning}
+          title="Switch LLM provider"
+        >
+          <option value="ollama">Ollama</option>
+          <option value="anthropic">Claude</option>
+          <option value="openai">OpenAI</option>
+        </select>
+      </div>
+
       {/* Model selector */}
       <div className="status-bar__model">
         {models.length > 0 ? (
@@ -49,34 +56,21 @@ export function StatusBar({
             ))}
           </select>
         ) : (
-          <span className="status-bar__model-name" title="Waiting for Ollama…">
-            Loading models…
+          <span className="status-bar__model-name" title="Waiting for model…">
+            {provider === 'ollama' ? 'Loading models…' : 'Select provider first'}
           </span>
         )}
         {models.length === 0 && (
-          <span className="status-bar__ollama-warn" title="Ollama not reachable or no models pulled">⚠</span>
+          <span className="status-bar__ollama-warn" title="No models available">⚠</span>
         )}
       </div>
 
-      {/* Running state */}
-      {stateLabel && (
-        <div className="status-bar__state">
-          {isRunning && <span className="status-bar__spinner" />}
-          <span>{stateLabel}</span>
-        </div>
-      )}
-
-      {/* Right side */}
+      {/* Right side - only show tokens when idle */}
       <div className="status-bar__right">
         {contextInfo && !isRunning && (
           <span className="status-bar__tokens" title="Context token usage">
             {contextInfo.tokenCount.toLocaleString()}/{contextInfo.budget.toLocaleString()} tk
           </span>
-        )}
-        {isRunning && (
-          <button className="status-bar__cancel" onClick={onCancel} title="Stop">
-            ■ Stop
-          </button>
         )}
       </div>
     </div>

@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { ChatMessage as ChatMessageType } from '@ciper-agent/shared';
+import { ChatMessage as ChatMessageType, AgentState } from '@ciper-agent/shared';
 import { ChatMessage } from './ChatMessage';
 import './MessageList.css';
 
@@ -7,6 +7,7 @@ interface MessageListProps {
   messages: ChatMessageType[];
   streamVersion: number;
   getStreamBuffer: (id: string) => string;
+  agentState: AgentState;
   onApproveDiff: (diffId: string) => void;
   onRejectDiff: (diffId: string) => void;
   onSuggestion?: (text: string) => void;
@@ -23,6 +24,7 @@ export function MessageList({
   messages,
   streamVersion,
   getStreamBuffer,
+  agentState,
   onApproveDiff,
   onRejectDiff,
   onSuggestion,
@@ -66,6 +68,7 @@ export function MessageList({
           key={msg.id}
           message={msg}
           streamContent={msg.streaming ? getStreamBuffer(msg.id) : undefined}
+          agentState={agentState}
           onApproveDiff={onApproveDiff}
           onRejectDiff={onRejectDiff}
         />

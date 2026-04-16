@@ -1,20 +1,20 @@
 .input-bar {
-  border-top: 1px solid var(--vscode-panel-border, #454545);
-  padding: 8px 12px 10px;
+  border-top: 1px solid var(--border-subtle);
+  padding: 10px 14px 12px;
   position: relative;
-  background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  background: var(--bg-secondary);
 }
 
-/* ── Slash command popup ────────────────────────────────────── */
+/* ── Slash command popup ─────────────────────────────── */
 .input-bar__slash-menu {
   position: absolute;
   bottom: 100%;
-  left: 12px;
-  right: 12px;
-  background: var(--vscode-editorWidget-background, #252526);
-  border: 1px solid var(--vscode-widget-border, #454545);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  left: 14px;
+  right: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.2);
   overflow: hidden;
   z-index: 10;
 }
@@ -24,10 +24,10 @@
   align-items: center;
   gap: 10px;
   width: 100%;
-  padding: 7px 12px;
+  padding: 8px 12px;
   background: transparent;
   border: none;
-  color: var(--vscode-foreground);
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   font-family: var(--vscode-font-family);
@@ -37,49 +37,60 @@
 
 .input-bar__slash-item:hover,
 .input-bar__slash-item--selected {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
-  color: var(--vscode-list-activeSelectionForeground, #fff);
+  background: var(--accent-primary);
+  color: #fff;
 }
 
 .input-bar__slash-cmd {
   font-weight: 600;
-  min-width: 72px;
+  min-width: 70px;
   font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--accent-secondary);
+}
+
+.input-bar__slash-item--selected .input-bar__slash-cmd,
+.input-bar__slash-item:hover .input-bar__slash-cmd {
+  color: inherit;
 }
 
 .input-bar__slash-hint {
-  opacity: 0.65;
+  opacity: 0.6;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-/* ── Context chips ─────────────────────────────────────────── */
+/* ── Context chips ──────────────────────────────────── */
 .input-bar__context-row {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-bottom: 6px;
+  margin-bottom: 8px;
 }
 
 .input-bar__chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-  background: var(--vscode-badge-background, #4d4d4d);
-  color: var(--vscode-badge-foreground, #fff);
-  max-width: 200px;
+  padding: 3px 8px;
+  border-radius: 12px;
+  font-size: 10px;
+  background: var(--accent-primary);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent-primary) 20%, transparent) 0%, color-mix(in srgb, var(--accent-primary) 10%, transparent) 100%);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 30%, transparent);
+  color: var(--text-primary);
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.input-bar__chip-icon { font-size: 9px; }
+
 .input-bar__chip--selection {
-  background: var(--vscode-gitDecoration-addedResourceForeground, #81b88b);
-  color: #fff;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--success) 20%, transparent) 0%, color-mix(in srgb, var(--success) 10%, transparent) 100%);
+  border-color: color-mix(in srgb, var(--success) 30%, transparent);
+  color: var(--success);
 }
 
 .input-bar__chip-remove {
@@ -88,47 +99,102 @@
   color: inherit;
   cursor: pointer;
   padding: 0;
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1;
-  opacity: 0.7;
+  opacity: 0.6;
   flex-shrink: 0;
+  transition: opacity 0.1s;
 }
 .input-bar__chip-remove:hover { opacity: 1; }
 
-/* ── @ attach button ───────────────────────────────────────── */
-.input-bar__attach-btn {
-  padding: 2px 8px;
-  border-radius: 10px;
-  border: 1px solid var(--vscode-panel-border, #454545);
+/* ── Mode row ─────────────────────────────────────────── */
+.input-bar__mode-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.input-bar__mode-group {
+  display: flex;
+  background: var(--bg-primary);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.input-bar__mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  border: none;
   background: transparent;
-  color: var(--vscode-foreground);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--vscode-font-family);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.input-bar__mode-btn svg { opacity: 0.7; transition: opacity 0.15s; }
+
+.input-bar__mode-btn:hover { background: var(--bg-tertiary); color: var(--text-primary); }
+.input-bar__mode-btn:hover svg { opacity: 1; }
+
+.input-bar__mode-btn--active {
+  background: var(--accent-primary);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.2);
+}
+
+.input-bar__mode-btn--active svg { opacity: 1; }
+
+/* ── Attach button ───────────────────────────────────── */
+.input-bar__attach-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-default);
+  background: transparent;
+  color: var(--text-muted);
   font-size: 11px;
   font-family: var(--vscode-font-family);
   cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.1s, background 0.1s;
+  transition: all 0.15s;
 }
-.input-bar__attach-btn:hover:not(:disabled) { opacity: 0.9; }
-.input-bar__attach-btn--active {
-  background: var(--vscode-button-secondaryBackground, #3a3d41);
-  border-color: var(--vscode-focusBorder, #007acc);
-  opacity: 1;
-}
-.input-bar__attach-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 
-/* ── File picker popup ─────────────────────────────────────── */
+.input-bar__attach-btn:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+.input-bar__attach-btn--active {
+  background: var(--accent-primary);
+  border-color: var(--accent-primary);
+  color: #fff;
+}
+
+.input-bar__attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ── File picker popup ────────────────────────────────── */
 .input-bar__file-picker {
   position: absolute;
   bottom: 100%;
-  left: 12px;
-  right: 12px;
-  background: var(--vscode-editorWidget-background, #252526);
-  border: 1px solid var(--vscode-widget-border, #454545);
-  border-radius: 6px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.4);
+  left: 14px;
+  right: 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: 0 -4px 20px rgba(0,0,0,0.2);
   overflow: hidden;
   z-index: 10;
-  max-height: 240px;
+  max-height: 220px;
   overflow-y: auto;
 }
 
@@ -136,55 +202,61 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 12px;
-  font-size: 11px;
+  padding: 8px 12px;
+  font-size: 10px;
   font-weight: 600;
-  opacity: 0.55;
-  border-bottom: 1px solid var(--vscode-widget-border, #454545);
-  background: var(--vscode-sideBar-background, #1e1e1e);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary);
 }
 
 .input-bar__file-picker-all {
   background: none;
-  border: 1px solid var(--vscode-panel-border, #454545);
-  color: var(--vscode-foreground);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
   font-size: 10px;
   font-family: var(--vscode-font-family);
-  padding: 1px 6px;
-  border-radius: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
   cursor: pointer;
-  opacity: 0.75;
+  opacity: 0.7;
+  transition: all 0.1s;
+  text-transform: none;
+  letter-spacing: 0;
 }
-.input-bar__file-picker-all:hover { opacity: 1; }
+.input-bar__file-picker-all:hover { opacity: 1; background: var(--bg-tertiary); }
 
 .input-bar__file-picker-empty {
-  padding: 10px 12px;
-  font-size: 12px;
-  opacity: 0.45;
+  padding: 16px 12px;
+  font-size: 11px;
+  color: var(--text-muted);
   text-align: center;
 }
 
 .input-bar__file-picker-item {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   width: 100%;
-  padding: 6px 12px;
+  padding: 8px 12px;
   background: transparent;
   border: none;
-  color: var(--vscode-foreground);
+  color: var(--text-primary);
   text-align: left;
   cursor: pointer;
   font-family: var(--vscode-font-family);
   font-size: 12px;
   transition: background 0.1s;
 }
+
 .input-bar__file-picker-item:hover {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
-  color: var(--vscode-list-activeSelectionForeground, #fff);
+  background: var(--accent-primary);
+  color: #fff;
 }
 
-.input-bar__file-picker-icon { flex-shrink: 0; }
+.input-bar__file-picker-icon { font-size: 12px; flex-shrink: 0; }
 
 .input-bar__file-picker-name {
   font-weight: 600;
@@ -197,101 +269,93 @@
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
 }
 
-/* ── Mode row ──────────────────────────────────────────────── */
-.input-bar__mode-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-bottom: 6px;
-}
-
-.input-bar__mode-btn {
-  padding: 2px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--vscode-panel-border, #454545);
-  background: transparent;
-  color: var(--vscode-foreground);
-  font-size: 11px;
-  font-family: var(--vscode-font-family);
-  cursor: pointer;
-  opacity: 0.6;
-  transition: opacity 0.1s, background 0.1s;
-}
-.input-bar__mode-btn:hover { opacity: 0.9; }
-.input-bar__mode-btn--active {
-  background: var(--vscode-button-background, #007acc);
-  color: var(--vscode-button-foreground, #fff);
-  border-color: var(--vscode-button-background, #007acc);
-  opacity: 1;
-}
-
-.input-bar__hint {
-  margin-left: auto;
-  font-size: 10px;
-  opacity: 0.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* ── Input row ─────────────────────────────────────────────── */
+/* ── Input row ───────────────────────────────────────── */
 .input-bar__input-row {
   display: flex;
-  gap: 6px;
+  gap: 8px;
   align-items: flex-end;
 }
 
 .input-bar__textarea {
   flex: 1;
   resize: none;
-  background: var(--vscode-input-background, #3c3c3c);
-  color: var(--vscode-input-foreground, #cccccc);
-  border: 1px solid var(--vscode-input-border, #3c3c3c);
-  border-radius: 6px;
-  padding: 7px 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  padding: 8px 12px;
   font-size: 13px;
   font-family: var(--vscode-font-family);
-  line-height: 1.45;
+  line-height: 1.5;
   outline: none;
-  min-height: 36px;
-  max-height: 160px;
+  min-height: 40px;
+  max-height: 140px;
   overflow-y: auto;
-  transition: border-color 0.15s;
-}
-.input-bar__textarea:focus {
-  border-color: var(--vscode-focusBorder, #007acc);
-}
-.input-bar__textarea:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-.input-bar__textarea::placeholder {
-  color: var(--vscode-input-placeholderForeground, #888);
+  transition: all 0.2s;
 }
 
+.input-bar__textarea:focus {
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+.input-bar__textarea:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.input-bar__textarea::placeholder { color: var(--text-muted); }
+
+/* ── Send button ─────────────────────────────────────── */
 .input-bar__send-btn {
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   flex-shrink: 0;
-  background: var(--vscode-button-background, #007acc);
-  color: var(--vscode-button-foreground, #fff);
+  background: var(--accent-primary);
+  color: #fff;
   border: none;
-  border-radius: 6px;
+  border-radius: 10px;
   cursor: pointer;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: opacity 0.15s;
-  margin-bottom: 2px;
+  transition: all 0.2s;
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--accent-primary) 40%, transparent);
 }
+
 .input-bar__send-btn:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground, #005a9e);
+  background: var(--accent-primary-hover);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-primary) 50%, transparent);
+  transform: translateY(-1px);
 }
+
+.input-bar__send-btn:active:not(:disabled) {
+  transform: translateY(0);
+}
+
 .input-bar__send-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
+  box-shadow: none;
 }
 
-.input-bar__stop-icon { font-size: 11px; }
+/* ── Stop button ─────────────────────────────────────── */
+.input-bar__send-btn--stop {
+  background: var(--error);
+  box-shadow: 0 2px 6px color-mix(in srgb, var(--error) 40%, transparent);
+}
+
+.input-bar__send-btn--stop:hover {
+  background: color-mix(in srgb, var(--error) 85%, black);
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--error) 50%, transparent);
+}
+
+.input-bar__hint {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

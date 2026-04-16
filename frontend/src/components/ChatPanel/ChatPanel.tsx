@@ -11,6 +11,7 @@ export function ChatPanel(): JSX.Element {
     agentState,
     models,
     selectedModel,
+    provider,
     contextInfo,
     openFiles,
     hasSelection,
@@ -22,6 +23,7 @@ export function ChatPanel(): JSX.Element {
     approveDiff,
     rejectDiff,
     selectModel,
+    selectProvider,
     requestContextSnapshot,
   } = useChat();
 
@@ -47,6 +49,7 @@ export function ChatPanel(): JSX.Element {
         messages={messages}
         streamVersion={streamVersion}
         getStreamBuffer={getStreamBuffer}
+        agentState={agentState}
         onApproveDiff={approveDiff}
         onRejectDiff={rejectDiff}
         onSuggestion={handleSuggestion}
@@ -56,9 +59,11 @@ export function ChatPanel(): JSX.Element {
         agentState={agentState}
         selectedModel={selectedModel}
         models={models}
+        provider={provider}
         contextInfo={contextInfo}
         onCancel={cancelStream}
         onSelectModel={selectModel}
+        onSelectProvider={selectProvider}
       />
 
       <InputBar

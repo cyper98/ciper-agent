@@ -110,10 +110,26 @@
     "configuration": {
       "title": "Ciper Agent",
       "properties": {
+        "ciperAgent.provider": {
+          "type": "string",
+          "default": "ollama",
+          "enum": ["ollama", "anthropic", "openai"],
+          "description": "LLM provider to use"
+        },
         "ciperAgent.ollamaEndpoint": {
           "type": "string",
           "default": "http://localhost:11434",
           "description": "Ollama API endpoint URL"
+        },
+        "ciperAgent.anthropicApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Anthropic API key (set via ANTHROPIC_API_KEY env var by default)"
+        },
+        "ciperAgent.openaiApiKey": {
+          "type": "string",
+          "default": "",
+          "description": "OpenAI API key (set via OPENAI_API_KEY env var by default)"
         },
         "ciperAgent.model": {
           "type": "string",

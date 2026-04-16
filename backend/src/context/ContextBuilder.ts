@@ -5,30 +5,72 @@ import { ContextPayload, ContextFile } from '@ciper-agent/shared';
 import { TokenBudget, ScoredContent } from './TokenBudget';
 import { FileRanker } from './FileRanker';
 import { getGitDiff } from './GitContextProvider';
-import { resolveLocalImports } from './import-dependency-resolver';
+import { resolveLocalImports, resolveNestedDependencies } from './import-dependency-resolver';
+import { ContextCompressor } from './ContextCompressor';
+import { LlmProvider } from '../llm/providers/LlmProvider';
+import { ModelManager } from '../llm/ModelManager';
 
+/** High token limits - compression handles overflow */
+const TOKEN_LIMITS: Record<string, number> = {
+  go:   12000,
+  ts:   10000,
+  tsx:  10000,
+  js:   10000,
+  py:   10000,
+  rs:   10000,
+  default: 8000,
+};
+
+function getTokenLimit(language: string): number {
+  return TOKEN_LIMITS[language] ?? TOKEN_LIMITS.default;
+}
 
 export class ContextBuilder {
   private fileRanker = new FileRanker();
+  private compressor: ContextCompressor | null = null;
 
-  constructor(private budget: TokenBudget) {}
+  constructor(
+    private budget: TokenBudget,
+    private llmProvider?: LlmProvider,
+    private modelManager?: ModelManager
+  ) {
+    if (llmProvider && modelManager) {
+      this.compressor = new ContextCompressor(llmProvider, modelManager.getSelectedModel());
+    }
+  }
 
   async build(options: {
     workspaceRoot: string;
     selectedText?: string;
-    attachedFiles?: string[];   // relative paths explicitly chosen by the user
+    attachedFiles?: string[];
+    query?: string;
   }): Promise<ContextPayload> {
-    const { workspaceRoot, selectedText, attachedFiles = [] } = options;
+    const { workspaceRoot, selectedText, attachedFiles = [], query } = options;
     const activeEditor = vscode.window.activeTextEditor;
 
-    // 1. Active file (highest priority)
+    // 1. Active file (highest priority) - READ FULL CONTENT
     let activeFile: ContextFile | undefined;
     if (activeEditor) {
       const doc = activeEditor.document;
+      const language = doc.languageId;
+      const maxTokens = getTokenLimit(language);
+      let content = doc.getText();
+      
+      // Compress if needed
+      if (this.compressor && content.length > maxTokens * 4) {
+        const result = await this.compressor.compress(content, {
+          maxTokens,
+          language,
+          filePath: path.relative(workspaceRoot, doc.fileName),
+          query,
+        });
+        content = result.compressed;
+      }
+      
       activeFile = {
         path: path.relative(workspaceRoot, doc.fileName),
-        content: this.budget.truncate(doc.getText(), 2000),
-        language: doc.languageId,
+        content,
+        language,
       };
     }
 
@@ -38,28 +80,66 @@ export class ContextBuilder {
       if (editor === activeEditor) continue;
       const doc = editor.document;
       if (doc.uri.scheme !== 'file') continue;
+      
+      const maxTokens = getTokenLimit(doc.languageId);
+      let content = doc.getText();
+      
+      if (this.compressor && content.length > maxTokens * 4) {
+        const result = await this.compressor.compress(content, {
+          maxTokens,
+          language: doc.languageId,
+          filePath: path.relative(workspaceRoot, doc.fileName),
+          query,
+        });
+        content = result.compressed;
+      }
+      
       openFiles.push({
         path: path.relative(workspaceRoot, doc.fileName),
-        content: this.budget.truncate(doc.getText(), 500),
+        content,
         language: doc.languageId,
       });
       if (openFiles.length >= 4) break;
     }
 
-    // 2b. Auto-discover imported local dependency files from the active file.
-    // These are resolved from import/require statements — npm packages are ignored.
+    // 3. Auto-discover imported local dependency files
+    // For Go files with complex nested service/repository chains, use deep resolution
     const depFiles: ContextFile[] = [];
     if (activeEditor) {
       const absActivePath = activeEditor.document.fileName;
       const sourceText = activeEditor.document.getText();
-      const depPaths = resolveLocalImports(sourceText, absActivePath);
+      const isGo = absActivePath.endsWith('.go');
+      
+      let depPaths: string[];
+      
+      // Use deep resolution for Go files to trace service -> repository chains
+      if (isGo) {
+        const nestedDeps = resolveNestedDependencies(absActivePath, 6);
+        depPaths = Array.from(nestedDeps.keys()).filter(p => p !== absActivePath);
+      } else {
+        depPaths = resolveLocalImports(sourceText, absActivePath, 2);
+      }
+      
       const depResults = await Promise.all(
         depPaths.map(async (absPath): Promise<ContextFile | null> => {
           try {
-            const content = await fs.promises.readFile(absPath, 'utf8');
+            let content = await fs.promises.readFile(absPath, 'utf8');
             const rel = path.relative(workspaceRoot, absPath);
             const ext = path.extname(absPath).slice(1) || 'text';
-            return { path: rel, content: this.budget.truncate(content, 1200), language: ext };
+            const isGoDep = absPath.endsWith('.go');
+            const maxTokens = isGoDep ? 12000 : getTokenLimit(ext);
+            
+            if (this.compressor && content.length > maxTokens * 4) {
+              const result = await this.compressor.compress(content, {
+                maxTokens,
+                language: ext,
+                filePath: rel,
+                query,
+              });
+              content = result.compressed;
+            }
+            
+            return { path: rel, content, language: ext };
           } catch {
             return null;
           }
@@ -68,23 +148,35 @@ export class ContextBuilder {
       depFiles.push(...depResults.filter((f): f is ContextFile => f !== null));
     }
 
-    // 3 & 4. Attached file reads + git diff — run in parallel to avoid blocking the event loop
+    // 4. Attached file reads + git diff
     const [gitDiff, ...attachedResults] = await Promise.all([
       getGitDiff(workspaceRoot),
       ...attachedFiles.map(async (relPath): Promise<ContextFile | null> => {
         try {
-          const absPath = path.resolve(workspaceRoot, relPath);
-          const content = await fs.promises.readFile(absPath, 'utf8');
+          let content = await fs.promises.readFile(path.resolve(workspaceRoot, relPath), 'utf8');
           const ext = path.extname(relPath).slice(1) || 'text';
-          return { path: relPath, content: this.budget.truncate(content, 4000), language: ext };
+          // Attached files get even more generous limits
+          const maxTokens = 15000;
+          
+          if (this.compressor && content.length > maxTokens * 4) {
+            const result = await this.compressor.compress(content, {
+              maxTokens,
+              language: ext,
+              filePath: relPath,
+              query,
+            });
+            content = result.compressed;
+          }
+          
+          return { path: relPath, content, language: ext };
         } catch {
-          return null; // File not readable — skip silently
+          return null;
         }
       }),
     ]);
     const attached = attachedResults.filter((f): f is ContextFile => f !== null);
 
-    // 5. Fit into token budget
+    // 5. Fit into token budget (now using actual compressed content)
     const items: ScoredContent[] = [];
 
     if (activeFile) {
@@ -99,9 +191,16 @@ export class ContextBuilder {
       items.push({ content: selectedText, label: 'selection', priority: 90 });
     }
 
-    // Auto-discovered imports get priority between attached (95) and open tabs (60)
-    for (const f of depFiles) {
-      items.push({ content: f.content, label: `dep:${f.path}`, priority: 80 });
+    const sortedDepFiles = [...depFiles].sort((a, b) => {
+      if (a.path.endsWith('.go') && !b.path.endsWith('.go')) return -1;
+      if (!a.path.endsWith('.go') && b.path.endsWith('.go')) return 1;
+      return 0;
+    });
+    
+    for (const f of sortedDepFiles) {
+      const isSameDir = activeFile && path.dirname(activeFile.path) === path.dirname(f.path);
+      const priority = isSameDir ? 78 : 70;
+      items.push({ content: f.content, label: `dep:${f.path}`, priority });
     }
 
     for (const f of openFiles) {

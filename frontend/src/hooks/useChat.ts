@@ -13,6 +13,7 @@ export interface UseChatReturn {
   agentState: AgentState;
   models: string[];
   selectedModel: string;
+  provider: string;
   contextInfo: { tokenCount: number; budget: number } | null;
   openFiles: string[];
   hasSelection: boolean;
@@ -24,6 +25,7 @@ export interface UseChatReturn {
   approveDiff: (diffId: string) => void;
   rejectDiff: (diffId: string) => void;
   selectModel: (model: string) => void;
+  selectProvider: (provider: string) => void;
   requestContextSnapshot: () => void;
 }
 
@@ -32,6 +34,7 @@ export function useChat(): UseChatReturn {
   const [agentState, setAgentState] = useState<AgentState>('IDLE');
   const [models, setModels] = useState<string[]>([]);
   const [selectedModel, setSelectedModel] = useState('');
+  const [provider, setProvider] = useState('ollama');
   const [contextInfo, setContextInfo] = useState<{ tokenCount: number; budget: number } | null>(null);
   const [openFiles, setOpenFiles] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -77,6 +80,16 @@ export function useChat(): UseChatReturn {
         break;
 
       case 'STREAM_TOKEN': {
+        if (!msg.messageId) break;
+        
+        // Check if this message already exists and is not streaming - ignore if so
+        const existingMsg = messages.find(m => m.id === msg.messageId);
+        if (existingMsg && !existingMsg.streaming) {
+          // Message already finalized - ignore subsequent tokens
+          break;
+        }
+        
+        // Only create message if this is the first token for this messageId
         if (!activeMessageId.current || activeMessageId.current !== msg.messageId) {
           activeMessageId.current = msg.messageId;
           addMessage({
@@ -87,6 +100,7 @@ export function useChat(): UseChatReturn {
             streaming: true,
           });
         }
+        
         appendToken(msg.messageId, msg.token);
         break;
       }
@@ -197,6 +211,7 @@ export function useChat(): UseChatReturn {
       case 'MODELS_LIST':
         setModels(msg.models);
         setSelectedModel(msg.selected);
+        if (msg.provider) setProvider(msg.provider);
         break;
 
       case 'CONTEXT_INFO':
@@ -260,6 +275,14 @@ export function useChat(): UseChatReturn {
   });
 
   const sendMessage = useCallback((content: string, mode: 'chat' | 'agent', attachedFiles?: string[]) => {
+    let finalAttachedFiles = attachedFiles;
+    if (!hasSelection) {
+      const hasFiles = attachedFiles && attachedFiles.length > 0;
+      if (!hasFiles && openFiles.length > 0) {
+        finalAttachedFiles = [openFiles[0]];
+      }
+    }
+
     const userMsg: ChatMessage = {
       id: generateId(),
       role: 'user',
@@ -271,16 +294,18 @@ export function useChat(): UseChatReturn {
       saveHistory(next);
       return next;
     });
+    // Clear selection after sending - selection was used for this message
+    setHasSelection(false);
     // Use the ref (not React state) to avoid stale-closure races between renders.
     // agentBusyRef is updated synchronously in the AGENT_STATE message handler.
     if (agentBusyRef.current) {
-      pendingQueueRef.current.push({ content, mode, attachedFiles });
+      pendingQueueRef.current.push({ content, mode, attachedFiles: finalAttachedFiles });
     } else {
       // Optimistically mark as busy so rapid double-sends don't both slip through.
       agentBusyRef.current = true;
-      sendToExtension({ kind: 'SEND_MESSAGE', content, mode, attachedFiles });
+      sendToExtension({ kind: 'SEND_MESSAGE', content, mode, attachedFiles: finalAttachedFiles });
     }
-  }, [saveHistory]);
+  }, [saveHistory, hasSelection, openFiles]);
 
   const cancelStream = useCallback(() => {
     sendToExtension({ kind: 'CANCEL_STREAM' });
@@ -306,6 +331,13 @@ export function useChat(): UseChatReturn {
     sendToExtension({ kind: 'SELECT_MODEL', model });
   }, []);
 
+  const selectProvider = useCallback((provider: string) => {
+    setProvider(provider);
+    setModels([]);
+    setSelectedModel('');
+    sendToExtension({ kind: 'SELECT_PROVIDER', provider });
+  }, []);
+
   const requestContextSnapshot = useCallback(() => {
     sendToExtension({ kind: 'REQUEST_CONTEXT_SNAPSHOT' });
   }, []);
@@ -315,6 +347,7 @@ export function useChat(): UseChatReturn {
     agentState,
     models,
     selectedModel,
+    provider,
     contextInfo,
     openFiles,
     hasSelection,
@@ -326,6 +359,7 @@ export function useChat(): UseChatReturn {
     approveDiff,
     rejectDiff,
     selectModel,
+    selectProvider,
     requestContextSnapshot,
   };
 }

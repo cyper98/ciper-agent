@@ -83,12 +83,12 @@ export class RetryStrategy {
   /** Return a concrete schema example for the given action type. */
   private schemaHintForType(type: string | undefined): string {
     const SCHEMAS: Record<string, string> = {
-      read_file:    '{"thought":"I need to read the file.","action":{"type":"read_file","path":"src/main.ts"}}',
-      write_file:   '{"thought":"I will create the file.","action":{"type":"write_file","path":"src/new.ts","content":"// content here"}}',
-      edit_file:    '{"thought":"I will edit the file.","action":{"type":"edit_file","path":"src/main.ts","diff":"--- a/src/main.ts\\n+++ b/src/main.ts\\n@@ -1,3 +1,3 @@\\n ctx\\n-old\\n+new\\n ctx"}}',
-      list_files:   '{"thought":"I will list the directory.","action":{"type":"list_files","path":"src"}}',
-      search_code:  '{"thought":"I will search for the symbol.","action":{"type":"search_code","query":"myFunction","filePattern":"**/*.ts"}}',
-      run_command:  '{"thought":"I will run the build.","action":{"type":"run_command","command":"npm run build"}}',
+      read_file:    '{"thought":"I need to read the file.","action":{"type":"read_file","path":"<filename>"}}',
+      write_file:   '{"thought":"I will create the file.","action":{"type":"write_file","path":"<filename>","content":"// content here"}}',
+      edit_file:    '{"thought":"I will edit the file.","action":{"type":"edit_file","path":"<filename>","diff":"--- a/<filename>\\n+++ b/<filename>\\n@@ -1,3 +1,3 @@\\n ctx\\n-old\\n+new\\n ctx"}}',
+      list_files:   '{"thought":"I will list the directory.","action":{"type":"list_files","path":"<directory>"}}',
+      search_code:  '{"thought":"I will search for the symbol.","action":{"type":"search_code","query":"<search_term>","filePattern":"**/*.<ext>"}}',
+      run_command:  '{"thought":"I will run the build.","action":{"type":"run_command","command":"<command>"}}',
       done:         '{"thought":"The task is complete.","action":{"type":"done","message":"Summary of what was accomplished."}}',
       sub_tasks:    '{"thought":"I will split this into parallel tasks.","action":{"type":"sub_tasks","tasks":[{"id":"w1","description":"<self-contained goal>"}]}}',
     };

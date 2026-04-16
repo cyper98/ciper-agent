@@ -1,8 +1,9 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
-import { OllamaClient, LlmCallOptions } from '../llm/OllamaClient';
+import { LlmProvider, LlmCallOptions } from '../llm/providers/LlmProvider';
 import { ModelManager } from '../llm/ModelManager';
-import { buildCompletionPrompt, buildChatCompletionPrompt } from '../prompts/templates/completion';
+import { buildCompletionPrompt, buildChatCompletionPrompt, buildContextAwareCompletionPrompt } from '../prompts/templates/completion';
+import { getGitDiff } from '../context/GitContextProvider';
 
 const COMPLETION_TIMEOUT_MS = 2000;
 // Small context window for completions — prefix ≤ 50 lines + suffix + prompt overhead
@@ -13,7 +14,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
   private debounceMs: number;
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private modelManager: ModelManager
   ) {
     this.debounceMs = vscode.workspace
@@ -77,7 +78,7 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     }
   }
 
-  private getCompletion(
+  private async getCompletion(
     prefix: string,
     suffix: string,
     language: string,
@@ -85,7 +86,6 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
     token: vscode.CancellationToken
   ): Promise<string | undefined> {
     return new Promise((resolve) => {
-      // Clear previous debounce
       clearTimeout(this.debounceTimer);
 
       this.debounceTimer = setTimeout(async () => {
@@ -103,13 +103,36 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
         }, COMPLETION_TIMEOUT_MS);
 
         try {
-          const prompt = buildChatCompletionPrompt({ prefix, suffix, language, filePath });
-          const model = this.modelManager.getCompletionModel();
+          const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
+          
+          // Get git diff for context
+          let gitDiff = '';
+          try {
+            gitDiff = await getGitDiff(workspaceRoot);
+          } catch {
+            // Ignore git errors
+          }
 
+          // Get open files for framework detection
+          const openFiles = vscode.window.tabGroups.all
+            .flatMap(g => g.tabs)
+            .map(tab => (tab.input as { uri?: vscode.Uri })?.uri?.fsPath ?? '')
+            .filter(f => f && !f.startsWith(workspaceRoot) || f);
+
+          const prompt = buildContextAwareCompletionPrompt({
+            prefix,
+            suffix,
+            language,
+            filePath,
+            gitDiff: gitDiff.slice(0, 1000),
+            openFiles,
+          });
+
+          const model = this.modelManager.getCompletionModel();
           const messages = [{ role: 'user' as const, content: prompt }];
 
           let result = '';
-          for await (const chunk of this.ollamaClient.streamChat(
+          for await (const chunk of this.llmProvider.streamChat(
             model,
             messages,
             abortController.signal,
@@ -117,17 +140,28 @@ export class InlineCompletionProvider implements vscode.InlineCompletionItemProv
             COMPLETION_LLM_OPTS
           )) {
             result += chunk;
-            // Stop if we have a reasonable completion (newline or 100 chars)
             if (result.includes('\n\n') || result.length > 200) break;
           }
 
           clearTimeout(timeoutId);
-          resolve(result.trim() || undefined);
+          
+          // Clean up the completion - remove any markdown artifacts
+          const cleaned = this.cleanCompletion(result);
+          resolve(cleaned || undefined);
         } catch {
           clearTimeout(timeoutId);
           resolve(undefined);
         }
       }, this.debounceMs);
     });
+  }
+
+  private cleanCompletion(text: string): string {
+    // Remove markdown code fences if accidentally included
+    let cleaned = text.replace(/^```[\w]*\n?/, '').replace(/\n?```$/, '');
+    // Remove leading/trailing whitespace
+    cleaned = cleaned.trim();
+    // If the completion starts with the same word as the line, remove it
+    return cleaned;
   }
 }

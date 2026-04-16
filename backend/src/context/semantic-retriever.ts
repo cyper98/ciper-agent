@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { OllamaClient } from '../llm/OllamaClient';
+import { LlmProvider } from '../llm/providers/LlmProvider';
 import { WorkspaceIndexer } from './workspace-indexer';
 
 export interface RetrievedChunk {
@@ -19,7 +19,7 @@ export interface RetrievedChunk {
  */
 export class SemanticRetriever {
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private indexer: WorkspaceIndexer
   ) {}
 
@@ -38,7 +38,7 @@ export class SemanticRetriever {
     const model = cfg.get<string>('embeddingModel', 'nomic-embed-text').trim();
     const topK = cfg.get<number>('ragTopK', 10);
 
-    const queryVec = await this.ollamaClient.embed(model, query, signal);
+    const queryVec = await this.llmProvider.embed(model, query, signal);
     if (queryVec.length === 0) {
       console.warn(
         `Ciper Agent: RAG embed returned empty vector for model "${model}". ` +

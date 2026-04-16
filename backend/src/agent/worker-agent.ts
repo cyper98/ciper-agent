@@ -1,4 +1,4 @@
-import { OllamaClient, OllamaChatMessage, LlmCallOptions } from '../llm/OllamaClient';
+import { LlmProvider, ChatMessage, LlmCallOptions } from '../llm/providers/LlmProvider';
 import { ToolExecutor } from '../tools/ToolExecutor';
 import { ResponseParser } from './ResponseParser';
 import { RetryStrategy } from './RetryStrategy';
@@ -15,7 +15,7 @@ export class WorkerAgent {
   private retryStrategy = new RetryStrategy(this.parser);
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private model: string,
     private numCtx: number,   // from ModelRouter.workerNumCtx() — 4096 on 4 GB, 8192 otherwise
     private toolExecutor: ToolExecutor,
@@ -26,7 +26,7 @@ export class WorkerAgent {
     const opts: LlmCallOptions = { numCtx: this.numCtx, numPredict: 1024, keepAlive: -1 };
     const systemPrompt = buildWorkerSystemPrompt(task.description, contextSnippet);
 
-    const history: OllamaChatMessage[] = [
+    const history: ChatMessage[] = [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: task.hint ?? `Begin your task: ${task.description}` },
     ];
@@ -41,7 +41,7 @@ export class WorkerAgent {
 
         // Collect full LLM response (workers don't stream thought to UI)
         let rawResponse = '';
-        for await (const token of this.ollamaClient.streamChat(
+        for await (const token of this.llmProvider.streamChat(
           this.model, history, this.signal, 'json', opts
         )) {
           rawResponse += token;
@@ -53,7 +53,7 @@ export class WorkerAgent {
           () => { /* silent retries — workers don't emit to bridge */ },
           async (msgs) => {
             let r = '';
-            for await (const t of this.ollamaClient.streamChat(this.model, msgs, this.signal, 'json', opts)) {
+            for await (const t of this.llmProvider.streamChat(this.model, msgs, this.signal, 'json', opts)) {
               r += t;
             }
             return r;

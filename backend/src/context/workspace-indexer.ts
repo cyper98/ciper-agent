@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { OllamaClient } from '../llm/OllamaClient';
+import { LlmProvider } from '../llm/providers/LlmProvider';
 
 export interface IndexedChunk {
   filePath: string;   // relative path from workspace root
@@ -36,7 +36,7 @@ export class WorkspaceIndexer {
   private _isIndexed = false;
 
   constructor(
-    private ollamaClient: OllamaClient,
+    private llmProvider: LlmProvider,
     private workspaceRoot: string
   ) {}
 
@@ -75,7 +75,7 @@ export class WorkspaceIndexer {
       const content = await fs.readFile(absPath, 'utf-8');
       const rawChunks = chunkText(content, relPath);
       for (const chunk of rawChunks) {
-        const vector = await this.ollamaClient.embed(model, chunk.text);
+        const vector = await this.llmProvider.embed(model, chunk.text);
         if (vector.length > 0) {
           this.chunks.push({ ...chunk, vector });
         }

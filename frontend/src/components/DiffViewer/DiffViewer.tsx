@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import './DiffViewer.css';
 
 interface DiffViewerProps {
@@ -26,6 +26,17 @@ function parseDiff(raw: string): DiffLine[] {
   });
 }
 
+function countChanges(lines: DiffLine[]): { added: number; removed: number } {
+  return lines.reduce(
+    (acc, line) => {
+      if (line.type === 'added') acc.added++;
+      if (line.type === 'removed') acc.removed++;
+      return acc;
+    },
+    { added: 0, removed: 0 }
+  );
+}
+
 export function DiffViewer({
   diffId,
   path,
@@ -37,7 +48,11 @@ export function DiffViewer({
 }: DiffViewerProps): JSX.Element {
   const [collapsed, setCollapsed] = useState(false);
   const filename = path.split('/').pop() ?? path;
-  const lines = parseDiff(diff);
+  const lines = useMemo(() => parseDiff(diff), [diff]);
+  const stats = useMemo(() => countChanges(lines), [lines]);
+
+  const isApproved = resolvedLabel?.toLowerCase().includes('approved') ?? false;
+  const isRejected = resolvedLabel?.toLowerCase().includes('rejected') ?? false;
 
   return (
     <div className="diff-viewer">
@@ -45,7 +60,21 @@ export function DiffViewer({
         <span className="diff-viewer__icon">📄</span>
         <span className="diff-viewer__filename" title={path}>{filename}</span>
         <span className="diff-viewer__path">{path}</span>
-        <span className="diff-viewer__chevron">{collapsed ? '▸' : '▾'}</span>
+        
+        {diff && !collapsed && (
+          <div className="diff-viewer__stats">
+            {stats.added > 0 && (
+              <span className="diff-viewer__stat--added">+{stats.added}</span>
+            )}
+            {stats.removed > 0 && (
+              <span className="diff-viewer__stat--removed">-{stats.removed}</span>
+            )}
+          </div>
+        )}
+        
+        <span className={`diff-viewer__chevron ${collapsed ? 'diff-viewer__chevron--collapsed' : ''}`}>
+          ▾
+        </span>
       </div>
 
       {!collapsed && (
@@ -67,20 +96,30 @@ export function DiffViewer({
 
           <div className="diff-viewer__footer">
             {resolved ? (
-              <span className="diff-viewer__resolved">{resolvedLabel}</span>
+              <span className={`diff-viewer__resolved ${isApproved ? 'diff-viewer__resolved--success' : isRejected ? 'diff-viewer__resolved--rejected' : ''}`}>
+                {isApproved && '✓ '}
+                {isRejected && '✗ '}
+                {resolvedLabel}
+              </span>
             ) : (
               <>
                 <button
-                  className="diff-viewer__btn diff-viewer__btn--apply"
-                  onClick={() => onApprove?.(diffId)}
-                >
-                  ✓ Apply Changes
-                </button>
-                <button
                   className="diff-viewer__btn diff-viewer__btn--reject"
-                  onClick={() => onReject?.(diffId)}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onReject?.(diffId);
+                  }}
                 >
                   ✗ Discard
+                </button>
+                <button
+                  className="diff-viewer__btn diff-viewer__btn--apply"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onApprove?.(diffId);
+                  }}
+                >
+                  ✓ Apply Changes
                 </button>
               </>
             )}

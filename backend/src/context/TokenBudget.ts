@@ -1,21 +1,32 @@
 /**
- * Estimates token counts and enforces a token budget for context building.
- * Uses a 4 characters per token heuristic (conservative for code).
+ * Token budget management with semantic-aware truncation.
+ * Uses SemanticChunker for intelligent boundary detection.
  */
+
+import { SemanticChunker } from './SemanticChunker';
 
 const CHARS_PER_TOKEN = 4;
 
 export interface ScoredContent {
   content: string;
   label: string;
-  priority: number; // Higher = more important
+  priority: number;
+}
+
+export interface TruncationResult {
+  content: string;
+  truncated: boolean;
+  originalLines: number;
+  keptLines: number;
 }
 
 export class TokenBudget {
   private budget: number;
+  private chunker: SemanticChunker;
 
   constructor(budget = 8192) {
     this.budget = budget;
+    this.chunker = new SemanticChunker();
   }
 
   estimate(text: string): number {
@@ -24,6 +35,10 @@ export class TokenBudget {
 
   getBudget(): number {
     return this.budget;
+  }
+
+  setBudget(budget: number): void {
+    this.budget = budget;
   }
 
   /**
@@ -47,12 +62,55 @@ export class TokenBudget {
   }
 
   /**
-   * Truncate text to fit within a given token count.
+   * Truncate text using semantic chunking to preserve meaningful boundaries.
+   * Returns both truncated content and metadata.
    */
-  truncate(text: string, maxTokens: number): string {
+  truncate(text: string, maxTokens: number): TruncationResult {
     const maxChars = maxTokens * CHARS_PER_TOKEN;
-    if (text.length <= maxChars) return text;
-    return text.slice(0, maxChars) + '\n... (truncated)';
+    const originalLines = text.split('\n').length;
+
+    if (text.length <= maxChars) {
+      return {
+        content: text,
+        truncated: false,
+        originalLines,
+        keptLines: originalLines,
+      };
+    }
+
+    const { text: truncated, truncated: wasTruncated } = this.chunker.truncateWithSemantics(
+      text,
+      maxTokens,
+      CHARS_PER_TOKEN
+    );
+
+    const keptLines = truncated.split('\n').length;
+
+    return {
+      content: truncated,
+      truncated: wasTruncated,
+      originalLines,
+      keptLines,
+    };
+  }
+
+  /**
+   * Legacy truncate method for backward compatibility.
+   */
+  truncateLegacy(text: string, maxTokens: number): string {
+    const result = this.truncate(text, maxTokens);
+    return result.content;
+  }
+
+  /**
+   * Truncate with query relevance scoring.
+   * Prioritizes chunks relevant to the query.
+   */
+  truncateWithQuery(text: string, maxTokens: number, query: string): string {
+    if (text.length <= maxTokens * CHARS_PER_TOKEN) {
+      return text;
+    }
+    return this.chunker.extractRelevantChunks(text, query, maxTokens, CHARS_PER_TOKEN);
   }
 
   /**
@@ -60,5 +118,29 @@ export class TokenBudget {
    */
   totalTokens(items: ScoredContent[]): number {
     return items.reduce((sum, item) => sum + this.estimate(item.content), 0);
+  }
+
+  /**
+   * Calculate remaining budget after items.
+   */
+  remainingBudget(items: ScoredContent[]): number {
+    const used = this.totalTokens(items);
+    return Math.max(0, this.budget - used);
+  }
+
+  /**
+   * Get usage stats.
+   */
+  getUsageStats(items: ScoredContent[]): {
+    used: number;
+    total: number;
+    percentUsed: number;
+  } {
+    const used = this.totalTokens(items);
+    return {
+      used,
+      total: this.budget,
+      percentUsed: Math.round((used / this.budget) * 100),
+    };
   }
 }
