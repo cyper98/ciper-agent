@@ -40,11 +40,22 @@ export class ProviderManager {
     const providerType = this.getProviderType();
     const provider = this.getCurrentProvider();
 
-    const available = await provider.isAvailable();
+    let available = await provider.isAvailable();
+    const maxRetries = 3;
+    const baseDelay = 500;
+
+    for (let attempt = 0; !available && attempt < maxRetries; attempt++) {
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      available = await provider.isAvailable();
+    }
+
     if (!available) {
-      vscode.window.showWarningMessage(
-        `Ciper Agent: ${this.getProviderName(providerType)} is not available. Check settings.`
-      );
+      setTimeout(() => {
+        vscode.window.showWarningMessage(
+          `Ciper Agent: ${this.getProviderName(providerType)} is not available. Check settings.`
+        );
+      }, 100);
     }
   }
 
@@ -61,26 +72,38 @@ export class ProviderManager {
     return provider.listModels();
   }
 
-  sendModelsTo(bridge: MessageBridge): void {
+  async sendModelsTo(bridge: MessageBridge): Promise<void> {
     const providerType = this.getProviderType();
     const provider = this.getCurrentProvider();
 
-    provider.listModels().then(models => {
-      const modelNames = models.map(m => m.name);
-      bridge.send({
-        kind: 'MODELS_LIST',
-        models: modelNames,
-        selected: modelNames[0] || '',
-        provider: providerType
-      });
-    }).catch(err => {
-      console.error('Failed to list models:', err);
-      bridge.send({
-        kind: 'MODELS_LIST',
-        models: [],
-        selected: '',
-        provider: providerType
-      });
+    const maxRetries = 3;
+    const baseDelay = 500;
+    let models: ModelInfo[] = [];
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delay = baseDelay * Math.pow(2, attempt - 1);
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+
+      if (!(await provider.isAvailable())) {
+        continue;
+      }
+
+      models = await provider.listModels();
+      if (models.length > 0) break;
+    }
+
+    if (models.length === 0) {
+      models = await provider.listModels().catch(() => []);
+    }
+
+    const modelNames = models.map(m => m.name);
+    bridge.send({
+      kind: 'MODELS_LIST',
+      models: modelNames,
+      selected: modelNames[0] || '',
+      provider: providerType
     });
   }
 

@@ -16,11 +16,22 @@ export class ModelManager {
   }
 
   async initialize(): Promise<void> {
-    const healthy = await this.provider.isAvailable();
+    let healthy = await this.provider.isAvailable();
+    const maxRetries = 3;
+    const baseDelay = 500;
+
+    for (let attempt = 0; !healthy && attempt < maxRetries; attempt++) {
+      const delay = baseDelay * Math.pow(2, attempt);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      healthy = await this.provider.isAvailable();
+    }
+
     if (!healthy) {
-      vscode.window.showWarningMessage(
-        'Ciper Agent: LLM provider not available. Check settings.'
-      );
+      setTimeout(() => {
+        vscode.window.showWarningMessage(
+          'Ciper Agent: LLM provider not available. Check settings.'
+        );
+      }, 100);
       return;
     }
 

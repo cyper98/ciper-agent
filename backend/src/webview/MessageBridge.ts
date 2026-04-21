@@ -92,9 +92,9 @@ export class MessageBridge {
     switch (msg.kind) {
       case 'READY':
         if (this.providerManager) {
-          this.providerManager.sendModelsTo(this);
+          await this.providerManager.sendModelsTo(this);
         } else {
-          this.modelManager.refreshModels(this);
+          await this.modelManager.refreshModels(this);
         }
         this.sendConversationsList();
         this.sendContextSnapshot();
@@ -154,7 +154,7 @@ export class MessageBridge {
       case 'SELECT_PROVIDER':
         if (this.providerManager) {
           vscode.workspace.getConfiguration('ciperAgent').update('provider', msg.provider, vscode.ConfigurationTarget.Global);
-          this.providerManager.sendModelsTo(this);
+          await this.providerManager.sendModelsTo(this);
         }
         break;
 
